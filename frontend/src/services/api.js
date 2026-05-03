@@ -106,6 +106,18 @@ export const authAPI = {
   getMe: () =>
     fetchAPI('/auth/me'),
 
+  updateProfile: (updates) =>
+    fetchAPI('/auth/profile', {
+      method: 'PUT',
+      body: JSON.stringify(updates),
+    }),
+
+  changePassword: (currentPassword, newPassword) =>
+    fetchAPI('/auth/password', {
+      method: 'PUT',
+      body: JSON.stringify({ currentPassword, newPassword }),
+    }),
+
   logout: () =>
     fetchAPI('/auth/logout', { method: 'POST' }),
 };
@@ -206,4 +218,48 @@ export const aiAPI = {
         review_count: reviewCount,
       }),
     }),
+
+  /**
+   * Get AI Core stats for dashboard
+   */
+  getStats: async () => {
+    try {
+      return await fetchAPI('/ai/stats');
+    } catch {
+      return {
+        total_documents: 0,
+        total_chunks: 0,
+        total_concepts: 0,
+        llm_available: false,
+      };
+    }
+  },
+};
+
+// ──── Health Check API ────
+
+export const healthAPI = {
+  /**
+   * Check API Gateway health
+   */
+  checkGateway: async () => {
+    try {
+      const resp = await fetch(`${API_BASE}/health`);
+      return resp.ok ? await resp.json() : null;
+    } catch {
+      return null;
+    }
+  },
+
+  /**
+   * Check AI Core health (via gateway proxy)
+   */
+  checkAICore: async () => {
+    try {
+      const resp = await fetch(`${API_BASE}/ai/health`);
+      return resp.ok ? await resp.json() : null;
+    } catch {
+      return null;
+    }
+  },
 };

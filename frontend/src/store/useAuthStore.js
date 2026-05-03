@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { authAPI, setTokens, clearTokens, getAccessToken } from '../services/api';
+import { authAPI, setTokens, clearTokens, getAccessToken } from '../services/api.js';
 
 const useAuthStore = create((set, get) => ({
   user: null,
@@ -70,6 +70,32 @@ const useAuthStore = create((set, get) => ({
     }
     clearTokens();
     set({ user: null, isAuthenticated: false, error: null });
+  },
+
+  // ──── Update Profile ────
+  updateProfile: async (updates) => {
+    try {
+      set({ isLoading: true, error: null });
+      const data = await authAPI.updateProfile(updates);
+      set({ user: data.user, isLoading: false });
+      return { success: true };
+    } catch (err) {
+      set({ isLoading: false, error: err.message });
+      return { success: false, error: err.message };
+    }
+  },
+
+  // ──── Change Password ────
+  changePassword: async (currentPassword, newPassword) => {
+    try {
+      set({ isLoading: true, error: null });
+      await authAPI.changePassword(currentPassword, newPassword);
+      set({ isLoading: false });
+      return { success: true };
+    } catch (err) {
+      set({ isLoading: false, error: err.message });
+      return { success: false, error: err.message };
+    }
   },
 
   // ──── Clear error ────

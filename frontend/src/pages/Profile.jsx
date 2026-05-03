@@ -1,19 +1,53 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import useAuthStore from '../store/useAuthStore';
-import { Camera, User, Mail, Lock, Shield, LogOut, Sparkles } from 'lucide-react';
+import { User, Mail, Lock, Shield, LogOut, Sparkles, Check, AlertCircle } from 'lucide-react';
 
 export default function Profile() {
-  const { user, logout } = useAuthStore();
+  const { user, logout, updateProfile, changePassword, isLoading } = useAuthStore();
   const navigate = useNavigate();
   const [formData, setFormData] = useState({
     name: user?.name || '', email: user?.email || '',
     currentPassword: '', newPassword: '',
   });
+  const [saveStatus, setSaveStatus] = useState(null); // 'success' | 'error' | null
+  const [statusMessage, setStatusMessage] = useState('');
 
   const handleChange = (e) => setFormData({ ...formData, [e.target.name]: e.target.value });
   const handleLogout = () => { logout(); navigate('/login'); };
-  const handleSave = (e) => { e.preventDefault(); /* TODO: API call */ };
+
+  const handleSaveProfile = async (e) => {
+    e.preventDefault();
+    setSaveStatus(null);
+
+    // Save profile info
+    if (formData.name !== user?.name || formData.email !== user?.email) {
+      const result = await updateProfile({
+        name: formData.name,
+        email: formData.email,
+      });
+      if (!result.success) {
+        setSaveStatus('error');
+        setStatusMessage(result.error || 'Failed to update profile');
+        return;
+      }
+    }
+
+    // Change password if provided
+    if (formData.currentPassword && formData.newPassword) {
+      const result = await changePassword(formData.currentPassword, formData.newPassword);
+      if (!result.success) {
+        setSaveStatus('error');
+        setStatusMessage(result.error || 'Failed to change password');
+        return;
+      }
+      setFormData(prev => ({ ...prev, currentPassword: '', newPassword: '' }));
+    }
+
+    setSaveStatus('success');
+    setStatusMessage('Changes saved successfully');
+    setTimeout(() => setSaveStatus(null), 3000);
+  };
 
   return (
     <div className="animate-fade-in-up" style={{ maxWidth: 900, margin: '0 auto' }}>
@@ -35,8 +69,27 @@ export default function Profile() {
             <div style={{ fontSize: '0.8125rem', color: 'var(--c-text-tertiary)', marginTop: 2 }}>{user?.email || 'user@example.com'}</div>
           </div>
           <div style={{ width: '100%', height: 1, background: 'var(--c-border)', margin: 'var(--space-sm) 0' }}/>
+
+          {/* Neural Profile Stats */}
+          <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 8 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8125rem' }}>
+              <span style={{ color: 'var(--c-text-tertiary)' }}>Concepts Mastered</span>
+              <span style={{ color: 'var(--c-text-primary)', fontWeight: 600 }}>{user?.neural_profile?.total_concepts_mastered || 0}</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8125rem' }}>
+              <span style={{ color: 'var(--c-text-tertiary)' }}>Study Time</span>
+              <span style={{ color: 'var(--c-text-primary)', fontWeight: 600 }}>{Math.round((user?.neural_profile?.total_study_time_minutes || 0) / 60)}h</span>
+            </div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8125rem' }}>
+              <span style={{ color: 'var(--c-text-tertiary)' }}>Learning Velocity</span>
+              <span style={{ color: 'var(--c-text-primary)', fontWeight: 600 }}>{user?.neural_profile?.learning_velocity?.toFixed(2) || '1.00'}x</span>
+            </div>
+          </div>
+
+          <div style={{ width: '100%', height: 1, background: 'var(--c-border)', margin: 'var(--space-sm) 0' }}/>
+
           <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.8125rem', fontWeight: 500, color: 'var(--c-success)', background: 'var(--c-success-glow)', padding: '0.5rem 1rem', borderRadius: 'var(--radius-full)', width: '100%', justifyContent: 'center' }}>
-            <Shield size={14}/> Pro Member
+            <Shield size={14}/> {user?.role === 'admin' ? 'Admin' : 'Active Member'}
           </div>
           <button onClick={handleLogout} className="btn btn-danger" style={{ width: '100%' }}>
             <LogOut size={14}/> Sign Out
@@ -44,7 +97,23 @@ export default function Profile() {
         </div>
 
         {/* Right — Form */}
-        <form className="bento-card" style={{ padding: 'var(--space-xl)' }} onSubmit={handleSave}>
+        <form className="bento-card" style={{ padding: 'var(--space-xl)' }} onSubmit={handleSaveProfile}>
+          {/* Status Message */}
+          {saveStatus && (
+            <div className="animate-fade-in" style={{
+              padding: '0.75rem 1rem',
+              borderRadius: 'var(--radius-md)',
+              marginBottom: 'var(--space-lg)',
+              display: 'flex', alignItems: 'center', gap: 8,
+              background: saveStatus === 'success' ? 'var(--c-success-glow)' : 'var(--c-error-glow)',
+              color: saveStatus === 'success' ? 'var(--c-success)' : 'var(--c-error)',
+              fontSize: '0.8125rem', fontWeight: 500,
+            }}>
+              {saveStatus === 'success' ? <Check size={14} /> : <AlertCircle size={14} />}
+              {statusMessage}
+            </div>
+          )}
+
           <h3 style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--c-text-primary)', marginBottom: 'var(--space-lg)' }}>Personal Information</h3>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-md)', marginBottom: 'var(--space-xl)' }}>
             <div>
@@ -81,7 +150,9 @@ export default function Profile() {
             </div>
           </div>
           <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-            <button type="submit" className="btn btn-primary">Save Changes</button>
+            <button type="submit" className="btn btn-primary" disabled={isLoading} style={{ opacity: isLoading ? 0.6 : 1 }}>
+              {isLoading ? 'Saving...' : 'Save Changes'}
+            </button>
           </div>
         </form>
       </div>

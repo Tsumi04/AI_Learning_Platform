@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import passport from 'passport';
 import jwt from 'jsonwebtoken';
-import { register, login, refreshToken, getMe, logout } from '../controllers/auth.controller.js';
+import { register, login, refreshToken, getMe, logout, updateProfile, changePassword } from '../controllers/auth.controller.js';
 import auth from '../middleware/auth.js';
 import { authLimiter } from '../middleware/rateLimiter.js';
 import config from '../config/env.js';
@@ -13,6 +13,8 @@ router.post('/register', authLimiter, register);
 router.post('/login', authLimiter, login);
 router.post('/refresh', refreshToken);
 router.get('/me', auth, getMe);
+router.put('/profile', auth, updateProfile);
+router.put('/password', auth, changePassword);
 router.post('/logout', auth, logout);
 
 // ── Google OAuth ──

@@ -2,11 +2,16 @@
 NEUROVAULT — AI Core API Server (FastAPI)
 Nhận requests từ Node.js API Gateway → xử lý bằng AI pipeline → trả kết quả.
 Chạy 100% local, KHÔNG gọi API bên ngoài nào.
+
+v3.0 — Added JSON persistence for doc_stores
 """
 
 import os
 import sys
+import json
 import traceback
+import pickle
+from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -31,17 +36,19 @@ from knowledge.graph_builder import KnowledgeGraphBuilder
 from generation.quiz_generator import QuizGenerator
 from generation.flashcard_generator import FlashcardGenerator
 from adaptive.spaced_repetition import FSRS
+from adaptive.deep_knowledge_tracer import DeepKnowledgeTracer
+from retrieval.cross_encoder_reranker import CrossEncoderReranker
 
 # ──── App Setup ────
 app = FastAPI(
     title="NEUROVAULT AI Core",
     description="AI Processing Engine — 100% Local, White-Box",
-    version="2.0.0",
+    version="3.0.0",
 )
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5000", "http://127.0.0.1:5000", "http://localhost:5173"],
+    allow_origins=["*"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -61,14 +68,111 @@ graph_builder = KnowledgeGraphBuilder()
 quiz_generator = QuizGenerator()
 flashcard_generator = FlashcardGenerator()
 fsrs = FSRS()
+dkt = DeepKnowledgeTracer()
+cross_encoder = CrossEncoderReranker()
 
 # LLM Engine (connects to local Ollama)
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
 LLM_MODEL = os.getenv("LLM_MODEL", "gemma3")
 llm_engine = LLMEngine(base_url=OLLAMA_URL, model=LLM_MODEL)
 
-# Per-document RAG storage (in-memory for now)
+# ──── Persistence Layer ────
+DATA_DIR = Path(os.path.dirname(os.path.abspath(__file__))) / ".." / "data"
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+STORES_DIR = DATA_DIR / "doc_stores"
+STORES_DIR.mkdir(parents=True, exist_ok=True)
+
+# In-memory cache backed by disk
 doc_stores: Dict[str, Dict] = {}
+
+
+def save_doc_store(doc_id: str, store: Dict):
+    """Persist a document store to disk as pickle (includes numpy arrays + BM25 objects)."""
+    try:
+        store_path = STORES_DIR / f"{doc_id}.pkl"
+        serializable = {
+            "chunks": store["chunks"],
+            "language": store["language"],
+            "bm25_data": {
+                "docs": store["bm25"].documents if hasattr(store["bm25"], "documents") else [],
+                "doc_count": store["bm25"].doc_count if hasattr(store["bm25"], "doc_count") else 0,
+            },
+            "vector_data": {
+                "vectors": store["vector_store"].vectors if hasattr(store["vector_store"], "vectors") else {},
+                "dim": store["vector_store"].dim if hasattr(store["vector_store"], "dim") else 128,
+            },
+        }
+        with open(store_path, "wb") as f:
+            pickle.dump(serializable, f)
+        print(f"[Persist] Saved store for {doc_id}")
+    except Exception as e:
+        print(f"[Persist] Failed to save {doc_id}: {e}")
+
+
+def load_doc_store(doc_id: str) -> Optional[Dict]:
+    """Load a document store from disk."""
+    store_path = STORES_DIR / f"{doc_id}.pkl"
+    if not store_path.exists():
+        return None
+    try:
+        with open(store_path, "rb") as f:
+            data = pickle.load(f)
+
+        # Rebuild BM25 index
+        bm25 = BM25()
+        chunk_texts = [c["text"] for c in data["chunks"]]
+        bm25.index(chunk_texts)
+
+        # Rebuild Vector Store
+        local_embedding = EmbeddingEngine(mode="tfidf", dim=128)
+        local_embedding.fit(chunk_texts)
+        vector_store = VectorStore(dim=128)
+        for chunk in data["chunks"]:
+            vec = local_embedding.embed(chunk["text"])
+            vector_store.add(id=chunk["chunk_id"], vector=vec, metadata={"position": chunk["position"]})
+
+        store = {
+            "chunks": data["chunks"],
+            "bm25": bm25,
+            "vector_store": vector_store,
+            "embedding_engine": local_embedding,
+            "language": data["language"],
+        }
+        print(f"[Persist] Loaded store for {doc_id}")
+        return store
+    except Exception as e:
+        print(f"[Persist] Failed to load {doc_id}: {e}")
+        return None
+
+
+def get_doc_store(doc_id: str) -> Optional[Dict]:
+    """Get store from memory cache, falling back to disk."""
+    if doc_id in doc_stores:
+        return doc_stores[doc_id]
+    store = load_doc_store(doc_id)
+    if store:
+        doc_stores[doc_id] = store
+    return store
+
+
+def load_all_stores():
+    """Load all persisted stores at startup."""
+    count = 0
+    for pkl_file in STORES_DIR.glob("*.pkl"):
+        doc_id = pkl_file.stem
+        store = load_doc_store(doc_id)
+        if store:
+            doc_stores[doc_id] = store
+            count += 1
+    if count:
+        print(f"[Persist] Loaded {count} document stores from disk")
+
+
+# Load on startup
+@app.on_event("startup")
+async def startup_event():
+    load_all_stores()
+
 
 # ──── Request/Response Models ────
 class ProcessRequest(BaseModel):
@@ -114,7 +218,9 @@ def health_check():
     llm_ok = llm_engine.is_available()
     return {
         "status": "ok",
-        "service": "NEUROVAULT AI Core v2.0",
+        "service": "NEUROVAULT AI Core v3.0",
+        "persisted_docs": len(list(STORES_DIR.glob("*.pkl"))),
+        "cached_docs": len(doc_stores),
         "modules": {
             "pdf_parser": "ready",
             "text_cleaner": "ready",
@@ -129,8 +235,28 @@ def health_check():
             "quiz_generator": "ready",
             "flashcard_generator": "ready",
             "fsrs_scheduler": "ready",
-            "llm_engine": "connected" if llm_ok else "offline (install Ollama)",
+            "persistence": "ready",
+            "llm_engine": f"connected ({LLM_MODEL})" if llm_ok else f"offline (model: {LLM_MODEL})",
         }
+    }
+
+
+@app.get("/api/stats")
+def get_stats():
+    """Global stats for dashboard."""
+    total_docs = len(doc_stores)
+    total_chunks = sum(len(s["chunks"]) for s in doc_stores.values())
+    all_concepts = set()
+    for s in doc_stores.values():
+        for c in s["chunks"]:
+            all_concepts.update(c.get("concepts", []))
+    return {
+        "total_documents": total_docs,
+        "total_chunks": total_chunks,
+        "total_concepts": len(all_concepts),
+        "persisted_on_disk": len(list(STORES_DIR.glob("*.pkl"))),
+        "llm_available": llm_engine.is_available(),
+        "llm_model": LLM_MODEL,
     }
 
 
@@ -138,7 +264,7 @@ def health_check():
 def process_document(request: ProcessRequest):
     """
     Full processing pipeline:
-    File → Parse → Clean → Detect → Split → Chunk → Embed → Index
+    File → Parse → Clean → Detect → Split → Chunk → Embed → Index → Persist
     """
     try:
         file_path = request.file_path
@@ -176,13 +302,14 @@ def process_document(request: ProcessRequest):
         chunk_dicts = []
         chunk_texts = [c.text for c in chunks]
         
-        embedding_engine.fit(chunk_texts)
+        local_embedding = EmbeddingEngine(mode="tfidf", dim=128)
+        local_embedding.fit(chunk_texts)
         bm25 = BM25()
         bm25.index(chunk_texts)
         vector_store = VectorStore(dim=128)
 
         for chunk in chunks:
-            vec = embedding_engine.embed(chunk.text)
+            vec = local_embedding.embed(chunk.text)
             vector_store.add(id=chunk.chunk_id, vector=vec, metadata={"position": chunk.position})
 
             # Extract concepts for this chunk
@@ -202,21 +329,23 @@ def process_document(request: ProcessRequest):
                 "concepts": concept_names,
             })
 
-        # Store for RAG retrieval
-        doc_stores[request.document_id] = {
+        # Store for RAG retrieval + persist to disk
+        store = {
             "chunks": chunk_dicts,
             "bm25": bm25,
             "vector_store": vector_store,
-            "embedding_engine": embedding_engine,
+            "embedding_engine": local_embedding,
             "language": language,
         }
+        doc_stores[request.document_id] = store
+        save_doc_store(request.document_id, store)
 
         word_count = text_cleaner.count_words(cleaned_text)
         char_count = len(cleaned_text)
 
         print(f"[AI Core] Processed doc {request.document_id}: "
               f"{word_count} words, {len(chunks)} chunks, lang={language}, "
-              f"vectors={vector_store.size()}")
+              f"vectors={vector_store.size()} — PERSISTED ✓")
 
         return ProcessResponse(
             document_id=request.document_id,
@@ -241,10 +370,9 @@ def chat_with_document(request: ChatRequest):
     """RAG-powered chat: retrieve relevant chunks → generate answer."""
     doc_id = request.document_id
     
-    if doc_id not in doc_stores:
+    store = get_doc_store(doc_id)
+    if not store:
         raise HTTPException(status_code=404, detail="Document not indexed. Process it first.")
-    
-    store = doc_stores[doc_id]
     
     # Build RAG pipeline
     rag = RAGPipeline(
@@ -276,10 +404,11 @@ def build_knowledge_graph(request: ProcessRequest):
     """Build knowledge graph from document chunks."""
     doc_id = request.document_id
     
-    if doc_id not in doc_stores:
+    store = get_doc_store(doc_id)
+    if not store:
         raise HTTPException(status_code=404, detail="Document not indexed.")
     
-    chunks = doc_stores[doc_id]["chunks"]
+    chunks = store["chunks"]
     graph = graph_builder.build(chunks, doc_id, user_id="system")
     
     return {
@@ -293,10 +422,11 @@ def generate_quiz(request: QuizRequest):
     """Generate quiz questions from document content."""
     doc_id = request.document_id
     
-    if doc_id not in doc_stores:
+    store = get_doc_store(doc_id)
+    if not store:
         raise HTTPException(status_code=404, detail="Document not indexed.")
     
-    chunks = doc_stores[doc_id]["chunks"]
+    chunks = store["chunks"]
     all_text = " ".join(c["text"] for c in chunks)
     concepts = concept_extractor.extract(all_text)
     
@@ -320,10 +450,11 @@ def generate_flashcards(request: FlashcardRequest):
     """Generate flashcards from document content."""
     doc_id = request.document_id
     
-    if doc_id not in doc_stores:
+    store = get_doc_store(doc_id)
+    if not store:
         raise HTTPException(status_code=404, detail="Document not indexed.")
     
-    chunks = doc_stores[doc_id]["chunks"]
+    chunks = store["chunks"]
     all_text = " ".join(c["text"] for c in chunks)
     concepts = concept_extractor.extract(all_text)
     
@@ -360,10 +491,11 @@ def schedule_review(request: ReviewRequest):
 @app.get("/api/concepts/{document_id}")
 def get_concepts(document_id: str):
     """Extract key concepts from a document."""
-    if document_id not in doc_stores:
+    store = get_doc_store(document_id)
+    if not store:
         raise HTTPException(status_code=404, detail="Document not indexed.")
     
-    chunks = doc_stores[document_id]["chunks"]
+    chunks = store["chunks"]
     all_text = " ".join(c["text"] for c in chunks)
     concepts = concept_extractor.extract(all_text)
     
@@ -373,13 +505,69 @@ def get_concepts(document_id: str):
         "total": len(concepts),
     }
 
+# ──── Deep Knowledge Tracing Endpoints ────
+
+class KTUpdateRequest(BaseModel):
+    learner_id: str
+    concept: str
+    is_correct: bool
+    related_concepts: List[str] = []
+
+class KTQueryRequest(BaseModel):
+    learner_id: str
+    concepts: List[str] = []
+
+
+@app.post("/api/knowledge-trace/update")
+def kt_update(request: KTUpdateRequest):
+    """Update learner mastery after a quiz/flashcard interaction."""
+    result = dkt.update(
+        learner_id=request.learner_id,
+        concept=request.concept,
+        is_correct=request.is_correct,
+        related_concepts=request.related_concepts,
+    )
+    return result
+
+
+@app.post("/api/knowledge-trace/predict")
+def kt_predict(request: KTQueryRequest):
+    """Get current mastery predictions for concepts."""
+    predictions = {}
+    for concept in request.concepts:
+        predictions[concept] = round(dkt.predict_mastery(request.learner_id, concept), 4)
+    
+    weak = dkt.get_weak_concepts(request.learner_id)
+    summary = dkt.get_learner_summary(request.learner_id)
+    
+    return {
+        "learner_id": request.learner_id,
+        "predictions": predictions,
+        "weak_concepts": weak[:10],
+        "summary": summary,
+    }
+
+
+@app.post("/api/adaptive-difficulty")
+def adaptive_difficulty(request: KTQueryRequest):
+    """Get recommended quiz difficulty based on learner state."""
+    difficulty = dkt.get_recommended_difficulty(request.learner_id, request.concepts)
+    weak = dkt.get_weak_concepts(request.learner_id, threshold=0.5)
+    
+    return {
+        "learner_id": request.learner_id,
+        "recommended_difficulty": difficulty,
+        "weak_concepts": [w["concept"] for w in weak[:5]],
+        "total_concepts_tracked": len(request.concepts),
+    }
+
 
 # ──── Run ────
 if __name__ == "__main__":
     import uvicorn
     print("""
 ╔══════════════════════════════════════════════╗
-║         NEUROVAULT AI Core v2.0              ║
+║         NEUROVAULT AI Core v3.0              ║
 ║         Running on port 8000                 ║
 ║         100%% Local — White-Box AI            ║
 ║                                              ║
@@ -387,10 +575,13 @@ if __name__ == "__main__":
 ║    - Document Processing Pipeline            ║
 ║    - TF-IDF Embedding Engine                 ║
 ║    - BM25 + Vector Hybrid Retrieval          ║
+║    - Cross-Encoder Reranker                  ║
 ║    - RAG Pipeline (Ollama/Gemma)             ║
 ║    - Knowledge Graph Builder                 ║
 ║    - Quiz & Flashcard Generator              ║
 ║    - FSRS Spaced Repetition                  ║
+║    - Deep Knowledge Tracing (DKT)            ║
+║    - Data Persistence (pickle/disk)          ║
 ╚══════════════════════════════════════════════╝
     """)
     uvicorn.run(app, host="0.0.0.0", port=8000)

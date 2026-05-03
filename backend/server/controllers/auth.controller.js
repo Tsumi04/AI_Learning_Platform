@@ -166,3 +166,77 @@ export const logout = async (req, res, next) => {
     next(err);
   }
 };
+
+/**
+ * PUT /api/auth/profile
+ * Update user profile (name, email)
+ * Requires: auth middleware
+ */
+export const updateProfile = async (req, res, next) => {
+  try {
+    const { name, email } = req.body;
+    const user = await User.findById(req.userId);
+
+    if (!user) {
+      return res.status(404).json({ error: 'User not found.' });
+    }
+
+    // Check email uniqueness if changing
+    if (email && email.toLowerCase() !== user.email) {
+      const existing = await User.findOne({ email: email.toLowerCase() });
+      if (existing) {
+        return res.status(409).json({ error: 'Email already in use.' });
+      }
+      user.email = email.toLowerCase();
+    }
+
+    if (name) user.name = name.trim();
+
+    await user.save();
+
+    res.json({
+      message: 'Profile updated successfully',
+      user: user.toJSON(),
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+/**
+ * PUT /api/auth/password
+ * Change password
+ * Requires: auth middleware
+ */
+export const changePassword = async (req, res, next) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ error: 'Current and new password are required.' });
+    }
+
+    if (newPassword.length < 6) {
+      return res.status(400).json({ error: 'New password must be at least 6 characters.' });
+    }
+
+    const user = await User.findById(req.userId);
+    if (!user) {
+      return res.status(404).json({ error: 'User not found.' });
+    }
+
+    // Verify current password
+    const isMatch = await user.comparePassword(currentPassword);
+    if (!isMatch) {
+      return res.status(401).json({ error: 'Current password is incorrect.' });
+    }
+
+    // Update password (pre-save hook will hash)
+    user.password_hash = newPassword;
+    await user.save();
+
+    res.json({ message: 'Password changed successfully' });
+  } catch (err) {
+    next(err);
+  }
+};

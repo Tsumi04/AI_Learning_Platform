@@ -9,7 +9,7 @@ export default function Header() {
     <header style={{
       height: 'var(--header-height)',
       borderBottom: '1px solid var(--c-border)',
-      background: 'rgba(10, 10, 15, 0.6)',
+      background: 'rgba(255, 255, 255, 0.8)',
       backdropFilter: 'blur(20px) saturate(180%)',
       WebkitBackdropFilter: 'blur(20px) saturate(180%)',
       display: 'flex',
@@ -40,7 +40,8 @@ export default function Header() {
             height: 38,
             fontSize: '0.8125rem',
             paddingLeft: '2.25rem',
-            background: 'var(--c-bg-card)',
+            background: 'var(--c-bg-secondary)',
+            border: '1px solid var(--c-border)',
           }}
         />
       </div>
@@ -48,9 +49,9 @@ export default function Header() {
       {/* Right Actions */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-md)' }}>
         {/* Notification Bell */}
-        <button className="btn-icon btn-ghost" style={{
+        <button style={{
           position: 'relative',
-          background: 'transparent',
+          background: 'var(--c-bg-card)',
           border: '1px solid var(--c-border)',
           borderRadius: 'var(--radius-md)',
           cursor: 'pointer',
@@ -61,14 +62,17 @@ export default function Header() {
           height: 38,
           color: 'var(--c-text-secondary)',
           transition: 'all var(--duration-fast)',
+          boxShadow: 'var(--shadow-xs)',
         }}
         onMouseEnter={(e) => {
           e.currentTarget.style.borderColor = 'var(--c-border-hover)';
           e.currentTarget.style.color = 'var(--c-text-primary)';
+          e.currentTarget.style.background = 'var(--c-bg-secondary)';
         }}
         onMouseLeave={(e) => {
           e.currentTarget.style.borderColor = 'var(--c-border)';
           e.currentTarget.style.color = 'var(--c-text-secondary)';
+          e.currentTarget.style.background = 'var(--c-bg-card)';
         }}
         >
           <Bell size={16} strokeWidth={1.5} />
@@ -96,7 +100,7 @@ export default function Header() {
           border: '1px solid transparent',
         }}
         onMouseEnter={(e) => {
-          e.currentTarget.style.background = 'var(--c-bg-glass)';
+          e.currentTarget.style.background = 'var(--c-bg-secondary)';
           e.currentTarget.style.borderColor = 'var(--c-border)';
         }}
         onMouseLeave={(e) => {

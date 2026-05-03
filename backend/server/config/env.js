@@ -2,7 +2,7 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 const config = {
-  port: parseInt(process.env.PORT, 10) || 5000,
+  port: parseInt(process.env.PORT, 10) || 5001,
   mongoUri: process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/neurovault',
   jwt: {
     secret: process.env.JWT_SECRET || 'fallback_secret',

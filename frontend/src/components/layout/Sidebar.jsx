@@ -20,9 +20,8 @@ export default function Sidebar() {
       position: 'relative',
       zIndex: 2,
       borderRight: '1px solid var(--c-border)',
-      background: 'rgba(10, 10, 15, 0.8)',
-      backdropFilter: 'blur(40px) saturate(180%)',
-      WebkitBackdropFilter: 'blur(40px) saturate(180%)',
+      background: 'white',
+      boxShadow: '1px 0 0 rgba(0,0,0,0.02)',
     }}>
       {/* Brand */}
       <div style={{
@@ -39,7 +38,7 @@ export default function Sidebar() {
           display: 'flex',
           alignItems: 'center',
           justifyContent: 'center',
-          boxShadow: '0 4px 16px rgba(99, 102, 241, 0.3)',
+          boxShadow: '0 4px 12px rgba(99, 102, 241, 0.25)',
         }}>
           <Sparkles size={20} color="white" strokeWidth={2.5} />
         </div>
@@ -87,15 +86,15 @@ export default function Sidebar() {
                 textDecoration: 'none',
                 fontSize: '0.9375rem',
                 fontWeight: isActive ? 600 : 400,
-                color: isActive ? 'var(--c-text-primary)' : 'var(--c-text-secondary)',
+                color: isActive ? 'var(--c-accent)' : 'var(--c-text-secondary)',
                 background: isActive ? 'var(--c-accent-glow)' : 'transparent',
-                border: isActive ? '1px solid rgba(99, 102, 241, 0.15)' : '1px solid transparent',
+                border: isActive ? '1px solid rgba(99, 102, 241, 0.12)' : '1px solid transparent',
                 transition: 'all var(--duration-normal) var(--ease-out-expo)',
                 position: 'relative',
               }}
               onMouseEnter={(e) => {
                 if (!isActive) {
-                  e.currentTarget.style.background = 'var(--c-bg-glass)';
+                  e.currentTarget.style.background = 'var(--c-bg-secondary)';
                   e.currentTarget.style.color = 'var(--c-text-primary)';
                 }
               }}
@@ -119,7 +118,7 @@ export default function Sidebar() {
                 }} />
               )}
               <item.icon size={18} strokeWidth={isActive ? 2 : 1.5} 
-                style={{ color: isActive ? 'var(--c-accent-light)' : 'inherit' }} />
+                style={{ color: isActive ? 'var(--c-accent)' : 'inherit' }} />
               <span>{item.name}</span>
               {isActive && <ChevronRight size={14} style={{ marginLeft: 'auto', opacity: 0.5 }} />}
             </NavLink>
@@ -135,7 +134,7 @@ export default function Sidebar() {
         <div style={{
           padding: '0.75rem',
           borderRadius: 'var(--radius-md)',
-          background: 'var(--c-bg-glass)',
+          background: 'var(--c-bg-secondary)',
           border: '1px solid var(--c-border)',
           display: 'flex',
           alignItems: 'center',

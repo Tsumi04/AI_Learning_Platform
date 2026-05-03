@@ -7,6 +7,44 @@ import axios from 'axios';
 const router = Router();
 
 /**
+ * GET /api/ai/health
+ * Check AI Core connection status
+ */
+router.get('/health', async (req, res) => {
+  try {
+    const response = await axios.get(`${config.aiCoreUrl}/health`, { timeout: 3000 });
+    res.json({
+      ai_core: 'online',
+      ...response.data,
+    });
+  } catch {
+    res.json({
+      ai_core: 'offline',
+      message: 'AI Core server is not running. Start with: python ai_server.py',
+    });
+  }
+});
+
+/**
+ * GET /api/ai/stats
+ * Get AI Core stats for dashboard
+ */
+router.get('/stats', async (req, res) => {
+  try {
+    const response = await axios.get(`${config.aiCoreUrl}/api/stats`, { timeout: 3000 });
+    res.json(response.data);
+  } catch {
+    res.json({
+      total_documents: 0,
+      total_chunks: 0,
+      total_concepts: 0,
+      llm_available: false,
+      llm_model: 'unknown',
+    });
+  }
+});
+
+/**
  * POST /api/ai/chat
  * RAG-powered chat with document
  */
@@ -22,10 +60,16 @@ router.post('/chat', auth, aiLimiter, async (req, res, next) => {
       document_id,
       query,
       chat_history,
-    });
+    }, { timeout: 60000 });
 
     res.json(response.data);
   } catch (err) {
+    if (err.code === 'ECONNREFUSED' || err.code === 'ENOTFOUND') {
+      return res.status(503).json({
+        error: 'AI Core server is offline.',
+        message: 'Ensure the Python AI server is running on port 8000.',
+      });
+    }
     if (err.response) {
       return res.status(err.response.status).json(err.response.data);
     }
