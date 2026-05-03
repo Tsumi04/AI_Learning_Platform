@@ -135,3 +135,75 @@ export const documentsAPI = {
   delete: (id) =>
     fetchAPI(`/documents/${id}`, { method: 'DELETE' }),
 };
+
+// ──── AI API ────
+
+export const aiAPI = {
+  /**
+   * RAG-powered chat with document
+   */
+  chat: (documentId, query, chatHistory = []) =>
+    fetchAPI('/ai/chat', {
+      method: 'POST',
+      body: JSON.stringify({
+        document_id: documentId,
+        query,
+        chat_history: chatHistory,
+      }),
+    }),
+
+  /**
+   * Generate quiz from document
+   */
+  generateQuiz: (documentId, numQuestions = 10, difficulty = 0.5) =>
+    fetchAPI('/ai/quiz', {
+      method: 'POST',
+      body: JSON.stringify({
+        document_id: documentId,
+        num_questions: numQuestions,
+        difficulty,
+      }),
+    }),
+
+  /**
+   * Generate flashcards from document
+   */
+  generateFlashcards: (documentId, maxCards = 20) =>
+    fetchAPI('/ai/flashcards', {
+      method: 'POST',
+      body: JSON.stringify({
+        document_id: documentId,
+        max_cards: maxCards,
+      }),
+    }),
+
+  /**
+   * Build knowledge graph from document
+   */
+  getKnowledgeGraph: (documentId) =>
+    fetchAPI('/ai/knowledge-graph', {
+      method: 'POST',
+      body: JSON.stringify({ document_id: documentId }),
+    }),
+
+  /**
+   * Get extracted concepts from document
+   */
+  getConcepts: (documentId) =>
+    fetchAPI(`/ai/concepts/${documentId}`),
+
+  /**
+   * Schedule spaced repetition review
+   */
+  scheduleReview: (rating, stability, difficulty, elapsedDays, reviewCount) =>
+    fetchAPI('/ai/spaced-repetition/review', {
+      method: 'POST',
+      body: JSON.stringify({
+        rating,
+        stability,
+        difficulty,
+        elapsed_days: elapsedDays,
+        review_count: reviewCount,
+      }),
+    }),
+};

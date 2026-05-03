@@ -1,100 +1,66 @@
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { Send, Sparkles } from 'lucide-react';
 import useAuthStore from '../../store/useAuthStore';
 
-export default function ChatBox() {
+export default function ChatBox({ documentId, documentTitle }) {
   const { user } = useAuthStore();
   const [inputText, setInputText] = useState('');
-  
-  // Mock Messages Array
-  const [messages, setMessages] = useState([
-    {
-      id: 1,
-      role: 'user',
-      content: 'What is HTML'
-    },
-    {
-      id: 2,
-      role: 'ai',
-      content: 'HTML, or HyperText Markup Language, is the standard markup language used to create and structure content on web pages. It defines elements like headings, paragraphs, links, images, forms, and multimedia. HTML provides the structure of web pages, which browsers interpret and display to users.'
-    }
-  ]);
+  const [isThinking, setIsThinking] = useState(false);
+  const messagesEndRef = useRef(null);
+  const [messages, setMessages] = useState([{
+    id: 'welcome', role: 'ai',
+    content: `I'm NeuroVault AI. I've analyzed "${documentTitle || 'this document'}". Ask me anything about it!`,
+  }]);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [messages]);
 
   const handleSend = () => {
-    if (!inputText.trim()) return;
-    
-    // Add user message
-    const newMessage = {
-      id: Date.now(),
-      role: 'user',
-      content: inputText
-    };
-    
-    setMessages(prev => [...prev, newMessage]);
+    if (!inputText.trim() || isThinking) return;
+    const userMsg = { id: `u-${Date.now()}`, role: 'user', content: inputText.trim() };
+    setMessages(p => [...p, userMsg]);
     setInputText('');
-
-    // Simulate AI typing delay
+    setIsThinking(true);
     setTimeout(() => {
-      setMessages(prev => [...prev, {
-        id: Date.now() + 1,
-        role: 'ai',
-        content: `Mô phỏng trả lời cho câu hỏi: "${newMessage.content}". Vì bạn sẽ tự viết thuật toán Local AI, dữ liệu này hiện là mock. Tương lai sẽ thay bằng API call thực tế của bạn.`
+      setMessages(p => [...p, {
+        id: `ai-${Date.now()}`, role: 'ai',
+        content: `Analyzing your question: "${userMsg.content}"\n\nThe AI inference engine (Gemma 4 + RAG) is being built. Once deployed, I'll provide document-grounded answers with citations — 100% local, zero APIs.`,
       }]);
-    }, 1000);
+      setIsThinking(false);
+    }, 1200);
   };
 
   return (
-    <div className="flex flex-col h-full bg-white rounded-xl shadow-sm border border-gray-100/50 relative px-4">
-      
-      {/* Chat Messages Area */}
-      <div className="flex-1 overflow-y-auto p-6 space-y-6">
-        {messages.map((msg) => (
-          <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'} items-end gap-3`}>
-            
-            {/* AI Avatar */}
-            {msg.role === 'ai' && (
-              <div className="w-10 h-10 rounded-xl bg-primary flex items-center justify-center text-white shrink-0 shadow-sm shadow-primary/20">
-                <Sparkles size={20} className="stroke-[2]" />
-              </div>
-            )}
-
-            {/* Message Bubble */}
-            <div 
-              className={`max-w-[70%] text-[15px] leading-relaxed p-4 shadow-sm ${
-                msg.role === 'user' 
-                  ? 'bg-primary text-white rounded-2xl rounded-br-sm' 
-                  : 'bg-white border border-gray-200/80 text-gray-700 rounded-2xl rounded-bl-sm'
-              }`}
-            >
-              {msg.content}
+    <div style={{ flex:1, display:'flex', flexDirection:'column', background:'var(--c-bg-card)', border:'1px solid var(--c-border)', borderRadius:'var(--radius-lg)', overflow:'hidden' }}>
+      <div style={{ flex:1, overflowY:'auto', padding:'var(--space-lg)', display:'flex', flexDirection:'column', gap:'var(--space-lg)' }}>
+        {messages.map((msg, i) => (
+          <div key={msg.id} className={i > 0 ? 'animate-fade-in-up' : ''} style={{ display:'flex', gap:'var(--space-md)', alignItems:'flex-start', flexDirection: msg.role === 'user' ? 'row-reverse' : 'row' }}>
+            <div style={{ width:32, height:32, borderRadius: msg.role === 'ai' ? 'var(--radius-md)' : '50%', background: msg.role === 'ai' ? 'var(--c-accent-gradient)' : 'var(--c-bg-glass-strong)', display:'flex', alignItems:'center', justifyContent:'center', flexShrink:0, boxShadow: msg.role === 'ai' ? '0 2px 8px rgba(99,102,241,0.2)' : 'none' }}>
+              {msg.role === 'ai' ? <Sparkles size={14} color="white" strokeWidth={2}/> : <span style={{ fontSize:'0.75rem', fontWeight:600, color:'var(--c-text-secondary)' }}>{user?.name?.charAt(0) || 'U'}</span>}
             </div>
-
-            {/* User Avatar */}
-            {msg.role === 'user' && (
-              <div className="w-10 h-10 rounded-full bg-gray-200 flex items-center justify-center text-gray-600 shrink-0 font-medium text-sm">
-                {user?.avatar || 'A'}
-              </div>
-            )}
+            <div style={{ maxWidth:'75%', padding:'0.875rem 1rem', borderRadius: msg.role === 'user' ? 'var(--radius-lg) var(--radius-lg) var(--radius-sm) var(--radius-lg)' : 'var(--radius-lg) var(--radius-lg) var(--radius-lg) var(--radius-sm)', background: msg.role === 'user' ? 'var(--c-accent-glow)' : 'var(--c-bg-glass)', border: `1px solid ${msg.role === 'user' ? 'rgba(99,102,241,0.15)' : 'var(--c-border)'}` }}>
+              <div style={{ fontSize:'0.875rem', lineHeight:1.7, color:'var(--c-text-primary)', whiteSpace:'pre-wrap', wordBreak:'break-word' }}>{msg.content}</div>
+            </div>
           </div>
         ))}
+        {isThinking && (
+          <div className="animate-fade-in" style={{ display:'flex', gap:'var(--space-md)' }}>
+            <div style={{ width:32, height:32, borderRadius:'var(--radius-md)', background:'var(--c-accent-gradient)', display:'flex', alignItems:'center', justifyContent:'center' }}>
+              <Sparkles size={14} color="white" strokeWidth={2}/>
+            </div>
+            <div style={{ padding:'0.875rem 1rem', borderRadius:'var(--radius-lg) var(--radius-lg) var(--radius-lg) var(--radius-sm)', background:'var(--c-bg-glass)', border:'1px solid var(--c-border)' }}>
+              <div className="typing-indicator"><div className="typing-dot"/><div className="typing-dot"/><div className="typing-dot"/></div>
+            </div>
+          </div>
+        )}
+        <div ref={messagesEndRef}/>
       </div>
-
-      {/* Chat Input Area */}
-      <div className="p-4 bg-white mt-auto sticky bottom-0">
-        <div className="relative flex items-center bg-transparent">
-          <input
-            type="text"
-            value={inputText}
-            onChange={(e) => setInputText(e.target.value)}
-            onKeyDown={(e) => e.key === 'Enter' && handleSend()}
-            placeholder="Ask a follow-up question..."
-            className="w-full pl-6 pr-14 py-4 rounded-full border border-gray-200/80 text-gray-700 focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary/50 shadow-sm transition-all"
-          />
-          <button 
-            onClick={handleSend}
-            className="absolute right-2 top-1/2 -translate-y-1/2 w-10 h-10 rounded-full bg-primary flex items-center justify-center text-white hover:bg-primary/90 transition-colors shadow-sm shadow-primary/20"
-          >
-            <Send size={18} className="mr-0.5 mt-0.5" />
+      <div style={{ padding:'var(--space-md) var(--space-lg)', borderTop:'1px solid var(--c-border)', background:'rgba(10,10,15,0.5)' }}>
+        <div style={{ position:'relative', display:'flex', alignItems:'center' }}>
+          <input type="text" value={inputText} onChange={e => setInputText(e.target.value)} onKeyDown={e => e.key==='Enter' && handleSend()} placeholder="Ask about this document..." disabled={isThinking} className="input" style={{ flex:1, borderRadius:'var(--radius-full)', paddingRight:'3rem', background:'var(--c-bg-glass)', opacity: isThinking ? 0.6 : 1 }}/>
+          <button onClick={handleSend} disabled={!inputText.trim() || isThinking} style={{ position:'absolute', right:6, width:34, height:34, borderRadius:'var(--radius-full)', background: inputText.trim() ? 'var(--c-accent-gradient)' : 'var(--c-bg-glass)', border:'none', display:'flex', alignItems:'center', justifyContent:'center', cursor: inputText.trim() ? 'pointer' : 'default', transition:'all var(--duration-fast)' }}>
+            <Send size={14} color={inputText.trim() ? 'white' : 'var(--c-text-muted)'}/>
           </button>
         </div>
       </div>

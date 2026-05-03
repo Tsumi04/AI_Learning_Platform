@@ -15,6 +15,12 @@ const config = {
     maxFileSize: parseInt(process.env.MAX_FILE_SIZE, 10) || 52428800, // 50MB
   },
   aiCoreUrl: process.env.AI_CORE_URL || 'http://127.0.0.1:8000',
+  google: {
+    clientId: process.env.GOOGLE_CLIENT_ID || '',
+    clientSecret: process.env.GOOGLE_CLIENT_SECRET || '',
+    callbackUrl: process.env.GOOGLE_CALLBACK_URL || 'http://localhost:5000/api/auth/google/callback',
+  },
+  clientUrl: process.env.CLIENT_URL || 'http://localhost:5173',
 };
 
 export default config;

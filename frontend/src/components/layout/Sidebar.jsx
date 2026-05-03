@@ -1,48 +1,158 @@
-import { LayoutGrid, FileText, Component, User } from 'lucide-react';
-import { NavLink } from 'react-router-dom';
+import { NavLink, useLocation } from 'react-router-dom';
+import { LayoutGrid, FileText, Brain, User, Sparkles, ChevronRight } from 'lucide-react';
+
+const menuItems = [
+  { name: 'Dashboard', icon: LayoutGrid, path: '/dashboard' },
+  { name: 'Documents', icon: FileText, path: '/documents' },
+  { name: 'AI Studio', icon: Brain, path: '/ai-studio' },
+  { name: 'Profile', icon: User, path: '/profile' },
+];
 
 export default function Sidebar() {
-  const menuItems = [
-    { name: 'Dashboard', icon: LayoutGrid, path: '/dashboard' },
-    { name: 'Documents', icon: FileText, path: '/documents' },
-    { name: 'Flashcards', icon: Component, path: '/flashcards' },
-    { name: 'Profile', icon: User, path: '/profile' },
-  ];
+  const location = useLocation();
 
   return (
-    <div className="w-64 h-full bg-white border-r border-gray-100 flex flex-col pt-6 pb-4">
-      <div className="px-6 flex items-center mb-8 gap-3">
-        <div className="w-8 h-8 rounded-lg bg-primary flex items-center justify-center text-white font-bold">
-          <span className="text-sm">AI</span>
+    <aside style={{
+      width: 'var(--sidebar-width)',
+      height: '100%',
+      display: 'flex',
+      flexDirection: 'column',
+      position: 'relative',
+      zIndex: 2,
+      borderRight: '1px solid var(--c-border)',
+      background: 'rgba(10, 10, 15, 0.8)',
+      backdropFilter: 'blur(40px) saturate(180%)',
+      WebkitBackdropFilter: 'blur(40px) saturate(180%)',
+    }}>
+      {/* Brand */}
+      <div style={{
+        padding: 'var(--space-xl) var(--space-lg)',
+        display: 'flex',
+        alignItems: 'center',
+        gap: 'var(--space-md)',
+      }}>
+        <div style={{
+          width: 40,
+          height: 40,
+          borderRadius: 'var(--radius-md)',
+          background: 'var(--c-accent-gradient)',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          boxShadow: '0 4px 16px rgba(99, 102, 241, 0.3)',
+        }}>
+          <Sparkles size={20} color="white" strokeWidth={2.5} />
         </div>
-        <h1 className="font-semibold text-gray-800 text-lg">AI Learning Assistant</h1>
+        <div>
+          <div style={{
+            fontSize: '1.0625rem',
+            fontWeight: 700,
+            color: 'var(--c-text-primary)',
+            letterSpacing: '-0.02em',
+          }}>
+            NeuroVault
+          </div>
+          <div style={{
+            fontSize: '0.6875rem',
+            color: 'var(--c-text-tertiary)',
+            fontWeight: 500,
+            letterSpacing: '0.05em',
+            textTransform: 'uppercase',
+          }}>
+            AI Learning
+          </div>
+        </div>
       </div>
 
-      <nav className="flex-1 px-4 space-y-1">
-        {menuItems.map((item) => (
-          <NavLink
-            key={item.name}
-            to={item.path}
-            className={({ isActive }) =>
-              `flex items-center gap-3 px-4 py-3 rounded-xl transition-colors ${
-                isActive
-                  ? 'bg-primary text-white font-medium'
-                  : 'text-gray-500 hover:bg-gray-50 hover:text-gray-700'
-              }`
-            }
-          >
-            <item.icon size={20} className="stroke-[1.5]" />
-            {item.name}
-          </NavLink>
-        ))}
+      {/* Navigation */}
+      <nav style={{
+        flex: 1,
+        padding: '0 var(--space-md)',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '2px',
+      }}>
+        {menuItems.map((item) => {
+          const isActive = location.pathname.startsWith(item.path);
+          return (
+            <NavLink
+              key={item.name}
+              to={item.path}
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 'var(--space-md)',
+                padding: '0.75rem 1rem',
+                borderRadius: 'var(--radius-md)',
+                textDecoration: 'none',
+                fontSize: '0.9375rem',
+                fontWeight: isActive ? 600 : 400,
+                color: isActive ? 'var(--c-text-primary)' : 'var(--c-text-secondary)',
+                background: isActive ? 'var(--c-accent-glow)' : 'transparent',
+                border: isActive ? '1px solid rgba(99, 102, 241, 0.15)' : '1px solid transparent',
+                transition: 'all var(--duration-normal) var(--ease-out-expo)',
+                position: 'relative',
+              }}
+              onMouseEnter={(e) => {
+                if (!isActive) {
+                  e.currentTarget.style.background = 'var(--c-bg-glass)';
+                  e.currentTarget.style.color = 'var(--c-text-primary)';
+                }
+              }}
+              onMouseLeave={(e) => {
+                if (!isActive) {
+                  e.currentTarget.style.background = 'transparent';
+                  e.currentTarget.style.color = 'var(--c-text-secondary)';
+                }
+              }}
+            >
+              {isActive && (
+                <div style={{
+                  position: 'absolute',
+                  left: -1,
+                  top: '50%',
+                  transform: 'translateY(-50%)',
+                  width: 3,
+                  height: 20,
+                  borderRadius: 'var(--radius-full)',
+                  background: 'var(--c-accent-gradient)',
+                }} />
+              )}
+              <item.icon size={18} strokeWidth={isActive ? 2 : 1.5} 
+                style={{ color: isActive ? 'var(--c-accent-light)' : 'inherit' }} />
+              <span>{item.name}</span>
+              {isActive && <ChevronRight size={14} style={{ marginLeft: 'auto', opacity: 0.5 }} />}
+            </NavLink>
+          );
+        })}
       </nav>
 
-      <div className="px-4 mt-auto">
-        <button className="flex items-center gap-3 px-4 py-3 w-full text-gray-500 hover:bg-gray-50 hover:text-gray-700 rounded-xl transition-colors text-left">
-          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"></path><polyline points="16 17 21 12 16 7"></polyline><line x1="21" y1="12" x2="9" y2="12"></line></svg>
-          Logout
-        </button>
+      {/* Bottom — Version Badge */}
+      <div style={{
+        padding: 'var(--space-lg)',
+        borderTop: '1px solid var(--c-border)',
+      }}>
+        <div style={{
+          padding: '0.75rem',
+          borderRadius: 'var(--radius-md)',
+          background: 'var(--c-bg-glass)',
+          border: '1px solid var(--c-border)',
+          display: 'flex',
+          alignItems: 'center',
+          gap: 'var(--space-sm)',
+        }}>
+          <div style={{
+            width: 8,
+            height: 8,
+            borderRadius: '50%',
+            background: 'var(--c-success)',
+            boxShadow: '0 0 8px var(--c-success)',
+          }} />
+          <span style={{ fontSize: '0.75rem', color: 'var(--c-text-tertiary)', fontWeight: 500 }}>
+            v1.0 — White-Box AI
+          </span>
+        </div>
       </div>
-    </div>
+    </aside>
   );
 }

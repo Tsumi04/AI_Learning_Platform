@@ -74,6 +74,23 @@ const useAuthStore = create((set, get) => ({
 
   // ──── Clear error ────
   clearError: () => set({ error: null }),
+
+  // ──── Google OAuth: set tokens from callback URL ────
+  setTokensFromGoogle: async (accessToken, refreshToken) => {
+    try {
+      set({ isLoading: true, error: null });
+      setTokens(accessToken, refreshToken);
+      const data = await authAPI.getMe();
+      set({
+        user: data.user,
+        isAuthenticated: true,
+        isLoading: false,
+      });
+    } catch (err) {
+      clearTokens();
+      set({ user: null, isAuthenticated: false, isLoading: false, error: 'Google sign-in failed' });
+    }
+  },
 }));
 
 export default useAuthStore;

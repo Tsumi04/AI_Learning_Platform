@@ -31,6 +31,16 @@ const userSchema = new mongoose.Schema({
     enum: ['user', 'admin'],
     default: 'user',
   },
+  google_id: {
+    type: String,
+    default: null,
+    sparse: true,
+  },
+  auth_provider: {
+    type: String,
+    enum: ['local', 'google'],
+    default: 'local',
+  },
   refresh_token: {
     type: String,
     default: null,

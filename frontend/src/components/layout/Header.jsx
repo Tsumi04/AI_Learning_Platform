@@ -1,4 +1,4 @@
-import { Bell } from 'lucide-react';
+import { Bell, Search } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import useAuthStore from '../../store/useAuthStore';
 
@@ -6,23 +6,134 @@ export default function Header() {
   const { user } = useAuthStore();
 
   return (
-    <header className="h-16 border-b border-gray-100 bg-white flex items-center justify-between px-8">
-      {/* Breadcrumb or left side empty */}
-      <div className="flex-1"></div>
+    <header style={{
+      height: 'var(--header-height)',
+      borderBottom: '1px solid var(--c-border)',
+      background: 'rgba(10, 10, 15, 0.6)',
+      backdropFilter: 'blur(20px) saturate(180%)',
+      WebkitBackdropFilter: 'blur(20px) saturate(180%)',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      padding: '0 var(--space-xl)',
+      position: 'relative',
+      zIndex: 2,
+    }}>
+      {/* Search Bar */}
+      <div style={{
+        position: 'relative',
+        width: '100%',
+        maxWidth: 400,
+      }}>
+        <Search size={16} style={{
+          position: 'absolute',
+          left: 12,
+          top: '50%',
+          transform: 'translateY(-50%)',
+          color: 'var(--c-text-tertiary)',
+        }} />
+        <input
+          type="text"
+          placeholder="Search documents, concepts..."
+          className="input input-with-icon"
+          style={{
+            height: 38,
+            fontSize: '0.8125rem',
+            paddingLeft: '2.25rem',
+            background: 'var(--c-bg-card)',
+          }}
+        />
+      </div>
 
-      <div className="flex items-center gap-6">
-        <div className="relative cursor-pointer text-gray-500 hover:text-gray-700">
-          <Bell size={22} className="stroke-[1.5]"/>
-          <span className="absolute top-0 right-0 w-2 h-2 bg-primary rounded-full border border-white"></span>
-        </div>
+      {/* Right Actions */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-md)' }}>
+        {/* Notification Bell */}
+        <button className="btn-icon btn-ghost" style={{
+          position: 'relative',
+          background: 'transparent',
+          border: '1px solid var(--c-border)',
+          borderRadius: 'var(--radius-md)',
+          cursor: 'pointer',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          width: 38,
+          height: 38,
+          color: 'var(--c-text-secondary)',
+          transition: 'all var(--duration-fast)',
+        }}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.borderColor = 'var(--c-border-hover)';
+          e.currentTarget.style.color = 'var(--c-text-primary)';
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.borderColor = 'var(--c-border)';
+          e.currentTarget.style.color = 'var(--c-text-secondary)';
+        }}
+        >
+          <Bell size={16} strokeWidth={1.5} />
+          <div style={{
+            position: 'absolute',
+            top: 6,
+            right: 6,
+            width: 6,
+            height: 6,
+            borderRadius: '50%',
+            background: 'var(--c-accent)',
+            boxShadow: '0 0 6px var(--c-accent)',
+          }} />
+        </button>
 
-        <Link to="/profile" className="flex items-center gap-3 hover:bg-gray-50 px-3 py-2 rounded-xl transition-colors">
-          <div className="w-10 h-10 rounded-full bg-primary flex flex-col items-center justify-center text-white font-medium shadow-sm">
-            {user?.avatar || 'A'}
+        {/* User Avatar */}
+        <Link to="/profile" style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: 'var(--space-md)',
+          padding: '0.375rem 0.75rem',
+          borderRadius: 'var(--radius-md)',
+          textDecoration: 'none',
+          transition: 'all var(--duration-fast)',
+          border: '1px solid transparent',
+        }}
+        onMouseEnter={(e) => {
+          e.currentTarget.style.background = 'var(--c-bg-glass)';
+          e.currentTarget.style.borderColor = 'var(--c-border)';
+        }}
+        onMouseLeave={(e) => {
+          e.currentTarget.style.background = 'transparent';
+          e.currentTarget.style.borderColor = 'transparent';
+        }}
+        >
+          <div style={{
+            width: 34,
+            height: 34,
+            borderRadius: 'var(--radius-md)',
+            background: 'var(--c-accent-gradient)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            color: 'white',
+            fontWeight: 600,
+            fontSize: '0.8125rem',
+            boxShadow: '0 2px 8px rgba(99, 102, 241, 0.2)',
+          }}>
+            {user?.avatar || user?.name?.charAt(0)?.toUpperCase() || 'A'}
           </div>
-          <div className="flex flex-col">
-            <span className="text-sm font-semibold text-gray-800 leading-tight">{user?.name || 'User'}</span>
-            <span className="text-xs text-gray-400">{user?.email || 'user@example.com'}</span>
+          <div style={{ display: 'flex', flexDirection: 'column' }}>
+            <span style={{
+              fontSize: '0.8125rem',
+              fontWeight: 600,
+              color: 'var(--c-text-primary)',
+              lineHeight: 1.3,
+            }}>
+              {user?.name || 'User'}
+            </span>
+            <span style={{
+              fontSize: '0.6875rem',
+              color: 'var(--c-text-tertiary)',
+            }}>
+              Pro Member
+            </span>
           </div>
         </Link>
       </div>
