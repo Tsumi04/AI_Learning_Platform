@@ -3,19 +3,28 @@ NEUROVAULT — AI Core API Server (FastAPI)
 Nhận requests từ Node.js API Gateway → xử lý bằng AI pipeline → trả kết quả.
 Chạy 100% local, KHÔNG gọi API bên ngoài nào.
 
-v3.0 — Added JSON persistence for doc_stores
+v4.0 — Gemma 4 E4B, Streaming SSE, Thinking Mode
 """
 
 import os
 import sys
+import io
 import json
 import traceback
 import pickle
 from pathlib import Path
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
+
+# ──── Windows Encoding Fix ────
+# Tránh UnicodeEncodeError khi print ký tự đặc biệt trên Windows console
+if sys.platform == "win32":
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace")
 
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -39,11 +48,19 @@ from adaptive.spaced_repetition import FSRS
 from adaptive.deep_knowledge_tracer import DeepKnowledgeTracer
 from retrieval.cross_encoder_reranker import CrossEncoderReranker
 
+# ──── Lifespan (startup/shutdown) ────
+@asynccontextmanager
+async def lifespan(app):
+    """FastAPI lifespan: load persisted doc stores on startup."""
+    load_all_stores()
+    yield
+
 # ──── App Setup ────
 app = FastAPI(
     title="NEUROVAULT AI Core",
-    description="AI Processing Engine — 100% Local, White-Box",
-    version="3.0.0",
+    description="AI Processing Engine — Gemma 4 E4B, 100% Local, White-Box",
+    version="4.0.0",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -73,7 +90,7 @@ cross_encoder = CrossEncoderReranker()
 
 # LLM Engine (connects to local Ollama)
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
-LLM_MODEL = os.getenv("LLM_MODEL", "gemma3")
+LLM_MODEL = os.getenv("LLM_MODEL", "gemma4:e4b")
 llm_engine = LLMEngine(base_url=OLLAMA_URL, model=LLM_MODEL)
 
 # ──── Persistence Layer ────
@@ -168,10 +185,6 @@ def load_all_stores():
         print(f"[Persist] Loaded {count} document stores from disk")
 
 
-# Load on startup
-@app.on_event("startup")
-async def startup_event():
-    load_all_stores()
 
 
 # ──── Request/Response Models ────
@@ -215,10 +228,11 @@ class ProcessResponse(BaseModel):
 
 @app.get("/health")
 def health_check():
-    llm_ok = llm_engine.is_available()
+    llm_health = llm_engine.health_check()
     return {
         "status": "ok",
-        "service": "NEUROVAULT AI Core v3.0",
+        "service": "NEUROVAULT AI Core v4.0",
+        "llm": llm_health,
         "persisted_docs": len(list(STORES_DIR.glob("*.pkl"))),
         "cached_docs": len(doc_stores),
         "modules": {
@@ -230,13 +244,15 @@ def health_check():
             "embedding_engine": "ready",
             "bm25": "ready",
             "vector_store": "ready",
+            "cross_encoder": "ready",
             "concept_extractor": "ready",
             "knowledge_graph": "ready",
             "quiz_generator": "ready",
             "flashcard_generator": "ready",
             "fsrs_scheduler": "ready",
+            "dkt": "ready",
             "persistence": "ready",
-            "llm_engine": f"connected ({LLM_MODEL})" if llm_ok else f"offline (model: {LLM_MODEL})",
+            "llm_engine": llm_health["status"],
         }
     }
 
@@ -367,13 +383,13 @@ def process_document(request: ProcessRequest):
 
 @app.post("/api/chat")
 def chat_with_document(request: ChatRequest):
-    """RAG-powered chat: retrieve relevant chunks → generate answer."""
+    """RAG-powered chat: retrieve relevant chunks -> generate answer."""
     doc_id = request.document_id
-    
+
     store = get_doc_store(doc_id)
     if not store:
         raise HTTPException(status_code=404, detail="Document not indexed. Process it first.")
-    
+
     # Build RAG pipeline
     rag = RAGPipeline(
         embedding_engine=store["embedding_engine"],
@@ -383,20 +399,74 @@ def chat_with_document(request: ChatRequest):
         language=store["language"],
     )
     rag.chunk_texts = {c["chunk_id"]: c["text"] for c in store["chunks"]}
-    
+
     # Generate answer
     result = rag.generate_answer(
         query=request.query,
         top_k=5,
         chat_history=request.chat_history,
     )
-    
+
     return {
         "answer": result["answer"],
         "sources": result["sources"],
         "query": result["query"],
         "document_id": doc_id,
     }
+
+
+@app.post("/api/chat/stream")
+def chat_stream(request: ChatRequest):
+    """Streaming RAG chat via SSE — real-time token-by-token response."""
+    doc_id = request.document_id
+
+    store = get_doc_store(doc_id)
+    if not store:
+        raise HTTPException(status_code=404, detail="Document not indexed. Process it first.")
+
+    # Build RAG pipeline for retrieval
+    rag = RAGPipeline(
+        embedding_engine=store["embedding_engine"],
+        vector_store=store["vector_store"],
+        bm25=store["bm25"],
+        llm_engine=llm_engine,
+        language=store["language"],
+    )
+    rag.chunk_texts = {c["chunk_id"]: c["text"] for c in store["chunks"]}
+
+    # Retrieve context
+    retrieved = rag.retrieve(request.query, top_k=5)
+    context_parts = []
+    for i, r in enumerate(retrieved):
+        context_parts.append(f"[Passage {i+1} | {r['chunk_id']}]\n{r['text']}")
+    context = "\n\n---\n\n".join(context_parts)
+
+    # Build messages for LLM
+    lang = store["language"]
+    system = (
+        "Ban la NeuroVault AI — tro ly hoc tap thong minh. Tra loi dua tren noi dung tai lieu."
+        if lang == "vi"
+        else "You are NeuroVault AI — an intelligent learning assistant. Answer based on document context."
+    )
+    user_prompt = f"Context:\n{context}\n\n---\nQuestion: {request.query}\nProvide a comprehensive answer."
+    messages = [{"role": "system", "content": system}]
+    if request.chat_history:
+        for msg in request.chat_history[-6:]:
+            messages.append(msg)
+    messages.append({"role": "user", "content": user_prompt})
+
+    def event_stream():
+        # Send sources first
+        sources_event = json.dumps({"type": "sources", "sources": retrieved})
+        yield f"data: {sources_event}\n\n"
+        # Stream tokens
+        for token in llm_engine.chat_stream(messages):
+            token_event = json.dumps({"type": "token", "content": token})
+            yield f"data: {token_event}\n\n"
+        # Done
+        yield f"data: {json.dumps({'type': 'done'})}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
 @app.post("/api/knowledge-graph")
@@ -566,22 +636,23 @@ def adaptive_difficulty(request: KTQueryRequest):
 if __name__ == "__main__":
     import uvicorn
     print("""
-╔══════════════════════════════════════════════╗
-║         NEUROVAULT AI Core v3.0              ║
-║         Running on port 8000                 ║
-║         100%% Local — White-Box AI            ║
-║                                              ║
-║  Modules:                                    ║
-║    - Document Processing Pipeline            ║
-║    - TF-IDF Embedding Engine                 ║
-║    - BM25 + Vector Hybrid Retrieval          ║
-║    - Cross-Encoder Reranker                  ║
-║    - RAG Pipeline (Ollama/Gemma)             ║
-║    - Knowledge Graph Builder                 ║
-║    - Quiz & Flashcard Generator              ║
-║    - FSRS Spaced Repetition                  ║
-║    - Deep Knowledge Tracing (DKT)            ║
-║    - Data Persistence (pickle/disk)          ║
-╚══════════════════════════════════════════════╝
+======================================================
+     NEUROVAULT AI Core v4.0 - Gemma 4 E4B
+     Running on port 8000
+     100% Local - White-Box AI
+
+     Modules:
+       - Document Processing Pipeline
+       - TF-IDF Embedding Engine
+       - BM25 + Vector Hybrid Retrieval
+       - Cross-Encoder Reranker
+       - RAG Pipeline (Ollama/Gemma 4)
+       - Streaming SSE Chat
+       - Knowledge Graph Builder
+       - Quiz & Flashcard Generator
+       - FSRS Spaced Repetition
+       - Deep Knowledge Tracing (DKT)
+       - Data Persistence (pickle/disk)
+======================================================
     """)
     uvicorn.run(app, host="0.0.0.0", port=8000)

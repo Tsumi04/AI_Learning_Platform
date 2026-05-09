@@ -4,7 +4,7 @@ Xây dựng đồ thị kiến thức từ chunks + concepts.
 """
 
 from typing import List, Dict, Tuple
-from .concept_extractor import ConceptExtractor
+from knowledge.concept_extractor import ConceptExtractor
 
 
 class KnowledgeGraphBuilder:

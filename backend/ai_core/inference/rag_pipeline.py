@@ -4,11 +4,11 @@ Retrieval-Augmented Generation: Retrieve relevant chunks → Generate answer.
 """
 
 from typing import List, Dict, Optional
-from ..retrieval.bm25 import BM25
-from ..retrieval.vector_store import VectorStore
-from ..retrieval.hybrid_ranker import HybridRanker
-from ..embedding.embedding_engine import EmbeddingEngine
-from .llm_engine import LLMEngine
+from retrieval.bm25 import BM25
+from retrieval.vector_store import VectorStore
+from retrieval.hybrid_ranker import HybridRanker
+from embedding.embedding_engine import EmbeddingEngine
+from inference.llm_engine import LLMEngine
 
 
 SYSTEM_PROMPT_EN = """You are NeuroVault AI — an intelligent learning assistant. 
