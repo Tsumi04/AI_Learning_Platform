@@ -386,4 +386,145 @@ router.post('/summary', auth, checkAICoreAvailable, async (req, res, next) => {
   }
 });
 
+// ──────────────────────────────────────────────
+// Agent System — Socratic Tutor + Orchestrator
+// ──────────────────────────────────────────────
+
+/**
+ * POST /api/ai/agent/ask
+ * Unified Agent Ask — Orchestrator tự động chọn agent
+ * Body: { query, learner_id?, document_id?, conversation_id?, language? }
+ */
+router.post('/agent/ask', auth, aiLimiter, async (req, res, next) => {
+  try {
+    const {
+      query,
+      learner_id = req.user?.id || 'anonymous',
+      document_id = '',
+      conversation_id = '',
+      language = '',
+    } = req.body;
+
+    if (!query) {
+      return res.status(400).json({
+        error: 'query is required.',
+        code: 'MISSING_PARAMS',
+      });
+    }
+
+    if (query.length > 5000) {
+      return res.status(400).json({
+        error: 'Query too long. Maximum 5000 characters.',
+        code: 'QUERY_TOO_LONG',
+      });
+    }
+
+    const response = await proxyToAICore('post', '/api/agent/ask', {
+      query,
+      learner_id,
+      document_id,
+      conversation_id,
+      language,
+    }, 90000); // 90s timeout — orchestrator cần suy nghĩ lâu hơn
+
+    res.json(response.data);
+  } catch (err) {
+    if (err.code === 'ECONNREFUSED' || err.code === 'ENOTFOUND') {
+      return res.status(503).json({
+        error: 'AI Core server is offline.',
+        code: 'AI_CORE_OFFLINE',
+        hint: 'cd backend/ai_core && python api/ai_server.py',
+      });
+    }
+    if (err.response) {
+      return res.status(err.response.status).json(err.response.data);
+    }
+    next(err);
+  }
+});
+
+
+/**
+ * POST /api/ai/agent/ask/stream
+ * Unified Agent Ask — SSE streaming mode
+ * Body: { query, learner_id?, document_id?, conversation_id?, language? }
+ */
+router.post('/agent/ask/stream', auth, aiLimiter, async (req, res) => {
+  const {
+    query,
+    learner_id = req.user?.id || 'anonymous',
+    document_id = '',
+    conversation_id = '',
+    language = '',
+  } = req.body;
+
+  if (!query) {
+    return res.status(400).json({
+      error: 'query is required.',
+      code: 'MISSING_PARAMS',
+    });
+  }
+
+  // Set SSE headers
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+
+  try {
+    const streamResponse = await axios.post(
+      `${config.aiCoreUrl}/api/agent/ask/stream`,
+      { query, learner_id, document_id, conversation_id, language },
+      {
+        timeout: 120000,
+        responseType: 'stream',
+      }
+    );
+
+    // Pipe SSE stream từ AI Core
+    streamResponse.data.on('data', (chunk) => {
+      res.write(chunk);
+    });
+
+    streamResponse.data.on('end', () => {
+      res.write('data: [DONE]\n\n');
+      res.end();
+    });
+
+    streamResponse.data.on('error', (err) => {
+      console.error('[Agent Ask Stream] Error:', err.message);
+      res.write(`data: ${JSON.stringify({ type: 'error', error: err.message })}\n\n`);
+      res.end();
+    });
+
+    req.on('close', () => {
+      streamResponse.data.destroy();
+    });
+  } catch (err) {
+    const errorMsg = err.code === 'ECONNREFUSED'
+      ? 'AI Core server is offline. Start the Python server first.'
+      : `Agent streaming failed: ${err.message}`;
+    res.write(`data: ${JSON.stringify({ type: 'error', error: errorMsg })}\n\n`);
+    res.end();
+  }
+});
+
+
+/**
+ * GET /api/ai/agent/status
+ * Trạng thái Agent system — registry, agents, metrics
+ */
+router.get('/agent/status', async (req, res) => {
+  try {
+    const response = await proxyToAICore('get', '/api/agent/status', null, 5000);
+    res.json(response.data);
+  } catch {
+    res.json({
+      status: 'offline',
+      message: 'Agent system is not available. AI Core may be offline.',
+      registry: { total_agents: 0, available: 0 },
+    });
+  }
+});
+
 export default router;

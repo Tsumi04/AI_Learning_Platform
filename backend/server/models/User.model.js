@@ -76,6 +76,7 @@ userSchema.pre('save', async function (next) {
 
 // So sánh password
 userSchema.methods.comparePassword = async function (candidatePassword) {
+  if (!this.password_hash) return false;
   return bcrypt.compare(candidatePassword, this.password_hash);
 };
 

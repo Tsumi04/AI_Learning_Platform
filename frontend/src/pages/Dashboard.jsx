@@ -6,8 +6,16 @@ import {
   Target, Flame, Activity, BarChart3, Network,
   Layers, MessageSquare,
 } from 'lucide-react';
-import { documentsAPI, healthAPI, aiAPI } from '../services/api';
+import { documentsAPI, healthAPI, aiAPI, learningAPI } from '../services/api';
 import useAuthStore from '../store/useAuthStore';
+
+// ── Dashboard v2 Components ──
+import StreakCard from '../components/dashboard/StreakCard';
+import ActivityHeatmap from '../components/dashboard/ActivityHeatmap';
+import WeeklyChart from '../components/dashboard/WeeklyChart';
+import MasteryDonut from '../components/dashboard/MasteryDonut';
+import StatsGrid from '../components/dashboard/StatsGrid';
+import RecentActivity from '../components/dashboard/RecentActivity';
 
 export default function Dashboard() {
   const { user } = useAuthStore();
@@ -16,6 +24,7 @@ export default function Dashboard() {
   const [isLoading, setIsLoading] = useState(true);
   const [showUpload, setShowUpload] = useState(false);
   const [aiStats, setAiStats] = useState(null);
+  const [dashboardData, setDashboardData] = useState(null);
   const [systemStatus, setSystemStatus] = useState({
     gateway: 'checking',
     aiCore: 'checking',
@@ -26,6 +35,7 @@ export default function Dashboard() {
     loadDocuments();
     checkSystemHealth();
     loadAIStats();
+    loadDashboardData();
     const interval = setInterval(checkSystemHealth, 30000);
     return () => clearInterval(interval);
   }, []);
@@ -45,6 +55,11 @@ export default function Dashboard() {
     setAiStats(stats);
   };
 
+  const loadDashboardData = async () => {
+    const data = await learningAPI.getDashboardStats();
+    setDashboardData(data);
+  };
+
   const loadDocuments = async () => {
     try {
       setIsLoading(true);
@@ -57,37 +72,6 @@ export default function Dashboard() {
       setIsLoading(false);
     }
   };
-
-  const stats = [
-    {
-      label: 'Documents',
-      value: documents.length || aiStats?.total_documents || 0,
-      icon: FileText,
-      color: 'var(--c-accent)',
-      glow: 'var(--c-accent-glow)',
-    },
-    {
-      label: 'Concepts',
-      value: aiStats?.total_concepts || user?.neural_profile?.total_concepts_mastered || 0,
-      icon: Brain,
-      color: '#8b5cf6',
-      glow: 'rgba(139, 92, 246, 0.1)',
-    },
-    {
-      label: 'Study Hours',
-      value: Math.round((user?.neural_profile?.total_study_time_minutes || 0) / 60),
-      icon: Clock,
-      color: '#10b981',
-      glow: 'rgba(16, 185, 129, 0.1)',
-    },
-    {
-      label: 'Streak',
-      value: '0 days',
-      icon: Flame,
-      color: '#f59e0b',
-      glow: 'rgba(245, 158, 11, 0.1)',
-    },
-  ];
 
   const getGreeting = () => {
     const hour = new Date().getHours();
@@ -138,8 +122,8 @@ export default function Dashboard() {
 
   return (
     <div className="animate-fade-in-up" style={{ maxWidth: 1400, margin: '0 auto' }}>
-      {/* Greeting Section */}
-      <div style={{ marginBottom: 'var(--space-2xl)' }}>
+      {/* ═══ GREETING SECTION ═══ */}
+      <div style={{ marginBottom: 'var(--space-xl)' }}>
         <h1 style={{
           fontSize: '1.75rem', fontWeight: 700,
           letterSpacing: '-0.03em', color: 'var(--c-text-primary)',
@@ -152,46 +136,44 @@ export default function Dashboard() {
         </p>
       </div>
 
-      {/* Stats Bento Grid */}
-      <div style={{
-        display: 'grid',
-        gridTemplateColumns: 'repeat(4, 1fr)',
-        gap: 'var(--space-md)',
-        marginBottom: 'var(--space-2xl)',
-      }}>
-        {stats.map((stat, i) => (
-          <div key={stat.label} className={`bento-card animate-fade-in-up stagger-${i + 1}`}
-            style={{ padding: 'var(--space-lg)' }}>
-            <div style={{ display: 'flex', alignItems: 'flex-start', justifyContent: 'space-between' }}>
-              <div>
-                <div style={{
-                  fontSize: '1.75rem', fontWeight: 700,
-                  color: 'var(--c-text-primary)', lineHeight: 1.2,
-                  letterSpacing: '-0.02em',
-                }}>
-                  {stat.value}
-                </div>
-                <div style={{
-                  fontSize: '0.8125rem', color: 'var(--c-text-tertiary)',
-                  marginTop: 4, fontWeight: 500,
-                }}>
-                  {stat.label}
-                </div>
-              </div>
-              <div style={{
-                width: 40, height: 40, borderRadius: 'var(--radius-md)',
-                background: stat.glow, display: 'flex',
-                alignItems: 'center', justifyContent: 'center',
-              }}>
-                <stat.icon size={18} style={{ color: stat.color }} strokeWidth={2} />
-              </div>
-            </div>
-          </div>
-        ))}
+      {/* ═══ STATS GRID — 6 MINI CARDS ═══ */}
+      <div style={{ marginBottom: 'var(--space-lg)' }}>
+        <StatsGrid
+          stats={dashboardData?.stats || {}}
+          documents={documents}
+        />
       </div>
 
-      {/* Main Content Area */}
-      <div style={{
+      {/* ═══ ROW 2: STREAK + WEEKLY CHART + MASTERY ═══ */}
+      <div className="dashboard-row-3col" style={{
+        display: 'grid',
+        gridTemplateColumns: '280px 1fr 300px',
+        gap: 'var(--space-md)',
+        marginBottom: 'var(--space-lg)',
+      }}>
+        {/* Streak Card */}
+        <div className="animate-fade-in-up stagger-1">
+          <StreakCard streak={dashboardData?.streak || {}} />
+        </div>
+
+        {/* Weekly Chart */}
+        <div className="animate-fade-in-up stagger-2">
+          <WeeklyChart weeklyActivity={dashboardData?.weeklyActivity || []} />
+        </div>
+
+        {/* Mastery Donut */}
+        <div className="animate-fade-in-up stagger-3">
+          <MasteryDonut masteryOverview={dashboardData?.masteryOverview || {}} />
+        </div>
+      </div>
+
+      {/* ═══ ROW 3: HEATMAP (FULL WIDTH) ═══ */}
+      <div className="animate-fade-in-up stagger-4" style={{ marginBottom: 'var(--space-lg)' }}>
+        <ActivityHeatmap heatmapData={dashboardData?.heatmapData || []} />
+      </div>
+
+      {/* ═══ ROW 4: DOCUMENTS + SIDEBAR ═══ */}
+      <div className="dashboard-main-content" style={{
         display: 'grid',
         gridTemplateColumns: '1fr 340px',
         gap: 'var(--space-lg)',
@@ -306,10 +288,15 @@ export default function Dashboard() {
           )}
         </div>
 
-        {/* Right Sidebar — Quick Actions */}
+        {/* Right Sidebar */}
         <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-md)' }}>
+          {/* Recent Activity */}
+          <div className="animate-fade-in-up stagger-2">
+            <RecentActivity recentActivity={dashboardData?.recentActivity || []} />
+          </div>
+
           {/* AI Features Card */}
-          <div className="bento-card animate-fade-in-up stagger-2" style={{
+          <div className="bento-card animate-fade-in-up stagger-3" style={{
             padding: 'var(--space-lg)',
             background: 'linear-gradient(135deg, rgba(99, 102, 241, 0.06) 0%, rgba(139, 92, 246, 0.04) 100%)',
             borderColor: 'rgba(99, 102, 241, 0.1)',
@@ -353,7 +340,7 @@ export default function Dashboard() {
 
           {/* AI Engine Info */}
           {aiStats && (
-            <div className="bento-card animate-fade-in-up stagger-3" style={{ padding: 'var(--space-lg)' }}>
+            <div className="bento-card animate-fade-in-up stagger-4" style={{ padding: 'var(--space-lg)' }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-sm)', marginBottom: 'var(--space-md)' }}>
                 <Activity size={14} style={{ color: 'var(--c-accent)' }} />
                 <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--c-text-primary)' }}>
@@ -377,7 +364,7 @@ export default function Dashboard() {
           )}
 
           {/* System Status */}
-          <div className="bento-card animate-fade-in-up stagger-4" style={{ padding: 'var(--space-lg)' }}>
+          <div className="bento-card animate-fade-in-up stagger-5" style={{ padding: 'var(--space-lg)' }}>
             <div style={{
               fontSize: '0.8125rem', fontWeight: 600,
               color: 'var(--c-text-primary)', marginBottom: 'var(--space-md)',
@@ -424,7 +411,7 @@ export default function Dashboard() {
       </div>
 
       {/* Upload Modal */}
-      {showUpload && <UploadModal onClose={() => setShowUpload(false)} onSuccess={() => { setShowUpload(false); loadDocuments(); loadAIStats(); }} />}
+      {showUpload && <UploadModal onClose={() => setShowUpload(false)} onSuccess={() => { setShowUpload(false); loadDocuments(); loadAIStats(); loadDashboardData(); }} />}
     </div>
   );
 }
@@ -473,7 +460,7 @@ function UploadModal({ onClose, onSuccess }) {
     }} onClick={onClose}>
       <div className="animate-scale-in" style={{
         width: '100%', maxWidth: 520, borderRadius: 'var(--radius-xl)',
-        padding: 'var(--space-xl)', background: 'white',
+        padding: 'var(--space-xl)', background: 'var(--c-bg-card)',
         border: '1px solid var(--c-border)', boxShadow: 'var(--shadow-xl)',
       }} onClick={e => e.stopPropagation()}>
         <h2 style={{ fontSize: '1.25rem', fontWeight: 700, color: 'var(--c-text-primary)', marginBottom: 'var(--space-lg)', letterSpacing: '-0.02em' }}>

@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import useAuthStore from '../store/useAuthStore';
 import { Mail, Lock, ArrowRight, Sparkles, Brain, Layers, Zap, Network } from 'lucide-react';
+import ThemeToggle from '../components/layout/ThemeToggle';
 
 export default function Login() {
   const { login, isLoading, error, clearError } = useAuthStore();
@@ -22,7 +23,12 @@ export default function Login() {
     <div style={{
       minHeight: '100vh', display: 'flex',
       background: 'var(--c-bg-primary)',
+      position: 'relative',
     }}>
+      {/* Theme Toggle — góc trên phải */}
+      <div style={{ position: 'absolute', top: 20, right: 20, zIndex: 10 }}>
+        <ThemeToggle />
+      </div>
       {/* Left — Visual Panel */}
       <div className="login-visual-panel" style={{
         flex: 1, display: 'none', position: 'relative', overflow: 'hidden',
@@ -105,7 +111,8 @@ export default function Login() {
       <div style={{
         flex: 1, display: 'flex', flexDirection: 'column',
         justifyContent: 'center', alignItems: 'center', padding: '2rem',
-        position: 'relative', background: 'white',
+        position: 'relative', background: 'var(--c-bg-card)',
+        transition: 'background var(--duration-slow) ease',
       }}>
         <div className="animate-fade-in-up" style={{ width: '100%', maxWidth: 400 }}>
           {/* Brand */}
@@ -189,7 +196,7 @@ export default function Login() {
               <div style={{ flex: 1, height: 1, background: 'var(--c-border)' }} />
             </div>
 
-            <a href="http://localhost:5000/api/auth/google" className="btn btn-ghost btn-lg"
+            <a href="http://localhost:5001/api/auth/google" className="btn btn-ghost btn-lg"
               style={{ width: '100%', gap: 'var(--space-md)', textDecoration: 'none' }}>
               <svg width="18" height="18" viewBox="0 0 24 24">
                 <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 0 1-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z"/>

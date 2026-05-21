@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { authAPI, setTokens, clearTokens, getAccessToken } from '../services/api.js';
+import { authAPI, setTokens, clearTokens, getAccessToken } from '../services/api';
 
 const useAuthStore = create((set, get) => ({
   user: null,

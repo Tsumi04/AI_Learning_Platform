@@ -124,3 +124,4 @@ Code variables/functions giữ tiếng Anh theo chuẩn quốc tế.
 ---
 
 **BẮT ĐẦU:** Đọc 2 file .md chiến lược, xác định task tiếp theo, và thực hiện.
+NÓI KHÔNG VỚI HARDCODE + MOCK DATA!!!

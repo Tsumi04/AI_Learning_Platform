@@ -1,207 +1,490 @@
-import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useState, useEffect, useMemo } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Brain, MessageSquare, HelpCircle, Layers, Network,
-  FileText, Sparkles, ArrowRight, Loader2, BookOpen,
-  ChevronRight, Zap, Target, TrendingUp,
+  FileText, Sparkles, BookOpen, BookMarked,
+  ChevronRight, Zap, Loader2, AlertCircle,
+  PanelLeftClose, PanelLeftOpen,
 } from 'lucide-react';
-import { documentsAPI } from '../services/api';
+import { documentsAPI, aiAPI } from '../services/api';
+import StreamingChatBox from '../components/chat/StreamingChatBox';
+import QuizView from '../components/quiz/QuizView';
+import FlashcardView from '../components/flashcard/FlashcardView';
+import KnowledgeGraphView from '../components/knowledge/KnowledgeGraphView';
+import SummaryView from '../components/summary/SummaryView';
 
-const aiFeatures = [
+/**
+ * AI Studio v2 — Tab-based AI Learning Interface
+ * 
+ * Tính năng:
+ * - 5 tabs: Chat, Quiz, Flashcards, Knowledge Graph, Summary
+ * - Streaming chat (SSE) với AbortController
+ * - Document selector sidebar (collapsible)
+ * - Chat history persistence (sessionStorage)
+ * - AI Core status indicator
+ * - Keyboard shortcuts
+ */
+
+const AI_TABS = [
   {
     id: 'chat',
-    name: 'Smart Chat',
-    desc: 'RAG-powered Q&A with your documents. Ask anything and get AI answers grounded in your content.',
+    label: 'Chat',
     icon: MessageSquare,
     color: '#6366f1',
     bg: 'rgba(99, 102, 241, 0.08)',
     borderColor: 'rgba(99, 102, 241, 0.15)',
+    desc: 'RAG-powered Q&A',
   },
   {
     id: 'quiz',
-    name: 'Auto Quiz',
-    desc: 'AI-generated assessments calibrated to your knowledge level. MCQ, fill-blank, and true/false.',
+    label: 'Quiz',
     icon: HelpCircle,
     color: '#8b5cf6',
     bg: 'rgba(139, 92, 246, 0.08)',
     borderColor: 'rgba(139, 92, 246, 0.15)',
+    desc: "Bloom's Taxonomy assessments",
   },
   {
     id: 'flashcards',
-    name: 'Flashcards',
-    desc: 'Spaced repetition flashcards with FSRS scheduling. Concept and cloze deletion cards.',
+    label: 'Flashcards',
     icon: Layers,
     color: '#10b981',
     bg: 'rgba(16, 185, 129, 0.08)',
     borderColor: 'rgba(16, 185, 129, 0.15)',
+    desc: 'FSRS spaced repetition',
   },
   {
     id: 'knowledge-graph',
-    name: 'Knowledge Graph',
-    desc: 'Visual concept map showing relationships between ideas extracted from your documents.',
+    label: 'Graph',
     icon: Network,
     color: '#f59e0b',
     bg: 'rgba(245, 158, 11, 0.08)',
     borderColor: 'rgba(245, 158, 11, 0.15)',
+    desc: 'Force-directed concepts',
+  },
+  {
+    id: 'summary',
+    label: 'Summary',
+    icon: BookMarked,
+    color: '#3b82f6',
+    bg: 'rgba(59, 130, 246, 0.08)',
+    borderColor: 'rgba(59, 130, 246, 0.15)',
+    desc: 'TextRank + Gemma 4',
   },
 ];
 
 export default function AIStudioPage() {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  // ── State ──
   const [documents, setDocuments] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [selectedDoc, setSelectedDoc] = useState(null);
+  const [activeTab, setActiveTab] = useState(searchParams.get('tab') || 'chat');
+  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [aiStatus, setAiStatus] = useState(null); // { ai_core, ollama, gemma4_ready }
+  const [searchQuery, setSearchQuery] = useState('');
 
+  // ── Load documents ──
   useEffect(() => {
     loadDocuments();
+    checkAIStatus();
   }, []);
 
   const loadDocuments = async () => {
     try {
       setIsLoading(true);
-      const data = await documentsAPI.list(1, 50);
+      const data = await documentsAPI.list(1, 100);
       const completed = (data.documents || []).filter(
         d => d.metadata?.processing_status === 'completed'
       );
       setDocuments(completed);
-      if (completed.length > 0 && !selectedDoc) setSelectedDoc(completed[0]);
+      // Auto-select first document hoặc document từ URL param
+      const docParam = searchParams.get('doc');
+      if (docParam) {
+        const found = completed.find(d => d._id === docParam);
+        if (found) setSelectedDoc(found);
+        else if (completed.length > 0) setSelectedDoc(completed[0]);
+      } else if (completed.length > 0 && !selectedDoc) {
+        setSelectedDoc(completed[0]);
+      }
     } catch (err) {
-      console.error('Failed to load documents:', err);
+      console.error('Lỗi khi tải danh sách tài liệu:', err);
     } finally {
       setIsLoading(false);
     }
   };
 
-  const handleFeatureClick = (featureId) => {
-    if (!selectedDoc) return;
-    // Navigate to document detail with the specific tab
-    navigate(`/documents/${selectedDoc._id}?tab=${featureId}`);
+  const checkAIStatus = async () => {
+    try {
+      const status = await aiAPI.getStats();
+      setAiStatus(status);
+    } catch {
+      setAiStatus({ llm_available: false });
+    }
+  };
+
+  // ── Update URL khi đổi tab ──
+  useEffect(() => {
+    const params = new URLSearchParams(searchParams);
+    params.set('tab', activeTab);
+    if (selectedDoc) params.set('doc', selectedDoc._id);
+    setSearchParams(params, { replace: true });
+  }, [activeTab, selectedDoc]);
+
+  // ── Keyboard shortcuts ──
+  useEffect(() => {
+    const handleKeyDown = (e) => {
+      // Ctrl + 1-5: Chuyển tab
+      if (e.ctrlKey && e.key >= '1' && e.key <= '5') {
+        e.preventDefault();
+        const idx = parseInt(e.key) - 1;
+        if (AI_TABS[idx]) setActiveTab(AI_TABS[idx].id);
+      }
+      // Ctrl + B: Toggle sidebar
+      if (e.ctrlKey && e.key === 'b') {
+        e.preventDefault();
+        setSidebarOpen(prev => !prev);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  // ── Filtered documents ──
+  const filteredDocs = useMemo(() => {
+    if (!searchQuery.trim()) return documents;
+    const q = searchQuery.toLowerCase();
+    return documents.filter(d => d.title?.toLowerCase().includes(q));
+  }, [documents, searchQuery]);
+
+  // ── Active tab config ──
+  const activeTabConfig = AI_TABS.find(t => t.id === activeTab);
+
+  // ── Render tab content ──
+  const renderContent = () => {
+    if (!selectedDoc) {
+      return (
+        <div className="empty-state" style={{ height: '100%' }}>
+          <div className="empty-state-icon">
+            <BookOpen size={32} style={{ color: 'var(--c-accent)' }} strokeWidth={1.5} />
+          </div>
+          <div>
+            <h3 style={{ fontSize: '1.125rem', fontWeight: 600, color: 'var(--c-text-primary)', marginBottom: 6 }}>
+              Chọn tài liệu để bắt đầu
+            </h3>
+            <p style={{ fontSize: '0.875rem', color: 'var(--c-text-secondary)', maxWidth: 320 }}>
+              Chọn một tài liệu đã xử lý từ danh sách bên trái, hoặc upload tài liệu mới.
+            </p>
+          </div>
+          <button className="btn btn-primary" onClick={() => navigate('/documents')}>
+            <FileText size={16} /> Quản lý tài liệu
+          </button>
+        </div>
+      );
+    }
+
+    switch (activeTab) {
+      case 'chat':
+        return (
+          <StreamingChatBox
+            key={selectedDoc._id}
+            documentId={selectedDoc._id}
+            documentTitle={selectedDoc.title}
+          />
+        );
+      case 'quiz':
+        return <QuizView key={selectedDoc._id} documentId={selectedDoc._id} />;
+      case 'flashcards':
+        return <FlashcardView key={selectedDoc._id} documentId={selectedDoc._id} />;
+      case 'knowledge-graph':
+        return <KnowledgeGraphView key={selectedDoc._id} documentId={selectedDoc._id} />;
+      case 'summary':
+        return <SummaryView key={selectedDoc._id} documentId={selectedDoc._id} />;
+      default:
+        return null;
+    }
   };
 
   return (
-    <div className="animate-fade-in-up" style={{ maxWidth: 1400, margin: '0 auto' }}>
-      {/* Page Header */}
-      <div style={{ marginBottom: 'var(--space-2xl)' }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-sm)', marginBottom: 4 }}>
-          <Sparkles size={20} style={{ color: 'var(--c-accent)' }} />
-          <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--c-accent)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>
-            AI Studio
-          </span>
+    <div className="animate-fade-in-up ai-studio-page" style={{
+      height: 'calc(100vh - var(--header-height) - var(--space-xl) * 2)',
+      display: 'flex', flexDirection: 'column',
+      maxWidth: 1600, margin: '0 auto',
+    }}>
+      {/* ══════ Header ══════ */}
+      <div style={{ marginBottom: 'var(--space-md)', flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-xs)', marginBottom: 2 }}>
+              <Sparkles size={16} style={{ color: 'var(--c-accent)' }} />
+              <span style={{
+                fontSize: '0.6875rem', fontWeight: 600, color: 'var(--c-accent)',
+                textTransform: 'uppercase', letterSpacing: '0.05em',
+              }}>
+                AI Studio
+              </span>
+            </div>
+            <h1 style={{
+              fontSize: '1.5rem', fontWeight: 700, color: 'var(--c-text-primary)',
+              letterSpacing: '-0.03em',
+            }}>
+              AI-Powered Learning Tools
+            </h1>
+          </div>
+
+          {/* AI Status Indicator */}
+          <div style={{
+            display: 'flex', alignItems: 'center', gap: 'var(--space-sm)',
+          }}>
+            {aiStatus && (
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 6,
+                padding: '0.375rem 0.75rem',
+                borderRadius: 'var(--radius-full)',
+                background: aiStatus.llm_available ? 'var(--c-success-glow)' : 'var(--c-warning-glow)',
+                border: `1px solid ${aiStatus.llm_available ? 'rgba(52,211,153,0.15)' : 'rgba(251,191,36,0.15)'}`,
+                fontSize: '0.6875rem', fontWeight: 500,
+                color: aiStatus.llm_available ? 'var(--c-success)' : '#b45309',
+              }}>
+                <div style={{
+                  width: 6, height: 6, borderRadius: '50%',
+                  background: aiStatus.llm_available ? 'var(--c-success)' : '#b45309',
+                  boxShadow: aiStatus.llm_available ? '0 0 6px var(--c-success)' : 'none',
+                }} />
+                {aiStatus.llm_available ? 'Gemma 4 Online' : 'AI Offline'}
+              </div>
+            )}
+          </div>
         </div>
-        <h1 style={{ fontSize: '1.75rem', fontWeight: 700, color: 'var(--c-text-primary)', letterSpacing: '-0.03em' }}>
-          AI-Powered Learning Tools
-        </h1>
-        <p style={{ fontSize: '0.9375rem', color: 'var(--c-text-secondary)', marginTop: 4 }}>
-          Select a document and choose an AI feature to enhance your learning.
-        </p>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '320px 1fr', gap: 'var(--space-xl)', alignItems: 'start' }}>
-        {/* Left: Document Selector */}
-        <div>
-          <div style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--c-text-primary)', marginBottom: 'var(--space-md)' }}>
-            Select Document
-          </div>
-          {isLoading ? (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-sm)' }}>
-              {[1, 2, 3].map(i => <div key={i} className="skeleton" style={{ height: 64, borderRadius: 'var(--radius-lg)' }} />)}
-            </div>
-          ) : documents.length === 0 ? (
-            <div className="bento-card" style={{ padding: 'var(--space-xl)', textAlign: 'center' }}>
-              <BookOpen size={32} style={{ color: 'var(--c-text-muted)', marginBottom: 'var(--space-md)' }} strokeWidth={1} />
-              <div style={{ fontSize: '0.875rem', color: 'var(--c-text-secondary)', marginBottom: 'var(--space-md)' }}>
-                No processed documents yet. Upload and process a document first.
-              </div>
-              <button className="btn btn-primary btn-sm" onClick={() => navigate('/documents')}>
-                Go to Documents
+      {/* ══════ Main Content ══════ */}
+      <div style={{
+        flex: 1, display: 'flex', gap: 'var(--space-md)',
+        minHeight: 0, // Quan trọng: cho phép flex item co lại
+      }}>
+        {/* ──── Left: Document Sidebar ──── */}
+        <div
+          className="ai-studio-sidebar"
+          style={{
+            width: sidebarOpen ? 260 : 0,
+            overflow: 'hidden',
+            flexShrink: 0,
+            transition: 'width var(--duration-normal) var(--ease-out-expo)',
+            display: 'flex', flexDirection: 'column',
+          }}
+        >
+          <div style={{
+            width: 260, // Cố định chiều rộng nội dung
+            display: 'flex', flexDirection: 'column',
+            height: '100%',
+          }}>
+            {/* Sidebar header */}
+            <div style={{
+              display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+              marginBottom: 'var(--space-sm)',
+            }}>
+              <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--c-text-secondary)' }}>
+                Tài liệu ({documents.length})
+              </span>
+              <button
+                onClick={() => setSidebarOpen(false)}
+                style={{
+                  width: 24, height: 24, borderRadius: 'var(--radius-sm)',
+                  border: 'none', background: 'transparent', cursor: 'pointer',
+                  display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  color: 'var(--c-text-tertiary)',
+                }}
+                title="Thu gọn sidebar (Ctrl+B)"
+              >
+                <PanelLeftClose size={14} />
               </button>
             </div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-xs)' }}>
-              {documents.map(doc => {
-                const isSelected = selectedDoc?._id === doc._id;
+
+            {/* Search */}
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              placeholder="Tìm tài liệu..."
+              className="input"
+              style={{
+                fontSize: '0.75rem', padding: '0.5rem 0.75rem',
+                borderRadius: 'var(--radius-md)',
+                marginBottom: 'var(--space-sm)',
+              }}
+            />
+
+            {/* Document list */}
+            <div style={{
+              flex: 1, overflowY: 'auto',
+              display: 'flex', flexDirection: 'column', gap: 2,
+            }}>
+              {isLoading ? (
+                [1, 2, 3].map(i => (
+                  <div key={i} className="skeleton" style={{ height: 52, borderRadius: 'var(--radius-md)' }} />
+                ))
+              ) : filteredDocs.length === 0 ? (
+                <div style={{
+                  textAlign: 'center', padding: 'var(--space-xl)',
+                  color: 'var(--c-text-tertiary)', fontSize: '0.8125rem',
+                }}>
+                  {documents.length === 0
+                    ? 'Chưa có tài liệu. Upload để bắt đầu.'
+                    : 'Không tìm thấy tài liệu.'}
+                </div>
+              ) : (
+                filteredDocs.map(doc => {
+                  const isSelected = selectedDoc?._id === doc._id;
+                  return (
+                    <button
+                      key={doc._id}
+                      onClick={() => setSelectedDoc(doc)}
+                      style={{
+                        display: 'flex', alignItems: 'center', gap: 'var(--space-sm)',
+                        padding: '0.5rem 0.75rem', borderRadius: 'var(--radius-md)',
+                        border: isSelected ? '1px solid rgba(99,102,241,0.2)' : '1px solid transparent',
+                        background: isSelected ? 'var(--c-accent-glow)' : 'transparent',
+                        cursor: 'pointer', width: '100%', textAlign: 'left',
+                        transition: 'all var(--duration-fast)',
+                      }}
+                      onMouseEnter={e => { if (!isSelected) e.currentTarget.style.background = 'var(--c-bg-secondary)'; }}
+                      onMouseLeave={e => { if (!isSelected) e.currentTarget.style.background = 'transparent'; }}
+                    >
+                      <div style={{
+                        width: 30, height: 30, borderRadius: 'var(--radius-sm)',
+                        background: isSelected ? 'rgba(99,102,241,0.15)' : 'var(--c-bg-secondary)',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        flexShrink: 0,
+                      }}>
+                        <FileText size={13} style={{
+                          color: isSelected ? 'var(--c-accent)' : 'var(--c-text-tertiary)',
+                        }} />
+                      </div>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{
+                          fontSize: '0.75rem', fontWeight: isSelected ? 600 : 500,
+                          color: isSelected ? 'var(--c-accent)' : 'var(--c-text-primary)',
+                          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                        }}>
+                          {doc.title}
+                        </div>
+                        <div style={{ fontSize: '0.625rem', color: 'var(--c-text-tertiary)' }}>
+                          {doc.metadata?.word_count?.toLocaleString() || 0} words
+                          {doc.language ? ` · ${doc.language.toUpperCase()}` : ''}
+                        </div>
+                      </div>
+                      {isSelected && <ChevronRight size={12} style={{ color: 'var(--c-accent)', flexShrink: 0 }} />}
+                    </button>
+                  );
+                })
+              )}
+            </div>
+
+            {/* Upload button */}
+            <button
+              className="btn btn-ghost btn-sm"
+              onClick={() => navigate('/documents')}
+              style={{ marginTop: 'var(--space-sm)', width: '100%', justifyContent: 'center', gap: 6 }}
+            >
+              <FileText size={13} /> Quản lý tài liệu
+            </button>
+          </div>
+        </div>
+
+        {/* ──── Right: Tab Content Area ──── */}
+        <div style={{
+          flex: 1, display: 'flex', flexDirection: 'column',
+          minWidth: 0, // Quan trọng: cho phép co lại
+        }}>
+          {/* Tab Bar */}
+          <div style={{
+            display: 'flex', alignItems: 'center',
+            borderBottom: '1px solid var(--c-border)',
+            marginBottom: 'var(--space-md)',
+            flexShrink: 0,
+          }}>
+            {/* Sidebar toggle (khi closed) */}
+            {!sidebarOpen && (
+              <button
+                onClick={() => setSidebarOpen(true)}
+                style={{
+                  width: 32, height: 32, borderRadius: 'var(--radius-md)',
+                  border: '1px solid var(--c-border)', background: 'var(--c-bg-card)',
+                  cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  marginRight: 'var(--space-md)', flexShrink: 0,
+                  color: 'var(--c-text-tertiary)',
+                  transition: 'all var(--duration-fast)',
+                }}
+                onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--c-border-hover)'; e.currentTarget.style.color = 'var(--c-text-secondary)'; }}
+                onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--c-border)'; e.currentTarget.style.color = 'var(--c-text-tertiary)'; }}
+                title="Mở sidebar (Ctrl+B)"
+              >
+                <PanelLeftOpen size={14} />
+              </button>
+            )}
+
+            {/* Tabs */}
+            <div className="tab-bar" style={{
+              flex: 1, borderBottom: 'none', gap: 0,
+              overflowX: 'auto',
+            }}>
+              {AI_TABS.map((tab, i) => {
+                const isActive = activeTab === tab.id;
+                const TabIcon = tab.icon;
                 return (
-                  <button key={doc._id} onClick={() => setSelectedDoc(doc)} style={{
-                    display: 'flex', alignItems: 'center', gap: 'var(--space-md)',
-                    padding: '0.75rem 1rem', borderRadius: 'var(--radius-md)',
-                    border: isSelected ? '1px solid rgba(99,102,241,0.2)' : '1px solid var(--c-border)',
-                    background: isSelected ? 'var(--c-accent-glow)' : 'var(--c-bg-card)',
-                    cursor: 'pointer', width: '100%', textAlign: 'left',
-                    transition: 'all var(--duration-fast)',
-                    boxShadow: isSelected ? '0 0 0 2px rgba(99,102,241,0.08)' : 'var(--shadow-xs)',
-                  }}
-                  onMouseEnter={e => { if (!isSelected) e.currentTarget.style.borderColor = 'var(--c-border-hover)'; }}
-                  onMouseLeave={e => { if (!isSelected) e.currentTarget.style.borderColor = 'var(--c-border)'; }}>
-                    <div style={{ width: 36, height: 36, borderRadius: 'var(--radius-sm)', background: isSelected ? 'rgba(99,102,241,0.15)' : 'var(--c-bg-secondary)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
-                      <FileText size={16} style={{ color: isSelected ? 'var(--c-accent)' : 'var(--c-text-tertiary)' }} />
-                    </div>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: '0.8125rem', fontWeight: isSelected ? 600 : 500, color: isSelected ? 'var(--c-accent)' : 'var(--c-text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
-                        {doc.title}
-                      </div>
-                      <div style={{ fontSize: '0.6875rem', color: 'var(--c-text-tertiary)' }}>
-                        {doc.metadata?.word_count?.toLocaleString() || 0} words
-                      </div>
-                    </div>
-                    {isSelected && <ChevronRight size={14} style={{ color: 'var(--c-accent)', flexShrink: 0 }} />}
+                  <button
+                    key={tab.id}
+                    className={`tab-item ${isActive ? 'active' : ''}`}
+                    onClick={() => setActiveTab(tab.id)}
+                    style={{
+                      borderBottomWidth: 2,
+                      borderBottomColor: isActive ? tab.color : 'transparent',
+                      color: isActive ? tab.color : undefined,
+                      gap: 6,
+                    }}
+                    title={`${tab.label} — ${tab.desc} (Ctrl+${i + 1})`}
+                  >
+                    <TabIcon size={14} style={{ color: isActive ? tab.color : 'var(--c-text-tertiary)' }} />
+                    <span>{tab.label}</span>
                   </button>
                 );
               })}
             </div>
-          )}
-        </div>
 
-        {/* Right: AI Features Grid */}
-        <div>
-          <div style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--c-text-primary)', marginBottom: 'var(--space-md)' }}>
-            AI Features {selectedDoc && <span style={{ fontWeight: 400, color: 'var(--c-text-tertiary)' }}>for "{selectedDoc.title}"</span>}
-          </div>
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(2, 1fr)', gap: 'var(--space-md)' }}>
-            {aiFeatures.map((feat, i) => (
-              <button key={feat.id}
-                className={`bento-card animate-fade-in-up stagger-${i + 1}`}
-                onClick={() => handleFeatureClick(feat.id)}
-                disabled={!selectedDoc}
-                style={{
-                  padding: 'var(--space-xl)', textAlign: 'left', cursor: selectedDoc ? 'pointer' : 'not-allowed',
-                  opacity: selectedDoc ? 1 : 0.5, border: `1px solid ${feat.borderColor}`,
-                  background: 'var(--c-bg-card)', width: '100%',
-                  transition: 'all var(--duration-normal) var(--ease-out-expo)',
+            {/* Selected document badge */}
+            {selectedDoc && (
+              <div style={{
+                display: 'flex', alignItems: 'center', gap: 6,
+                padding: '0.25rem 0.75rem',
+                borderRadius: 'var(--radius-full)',
+                background: 'var(--c-bg-secondary)',
+                border: '1px solid var(--c-border)',
+                marginLeft: 'var(--space-sm)',
+                maxWidth: 200,
+                flexShrink: 0,
+              }}>
+                <FileText size={11} style={{ color: 'var(--c-text-tertiary)', flexShrink: 0 }} />
+                <span style={{
+                  fontSize: '0.6875rem', color: 'var(--c-text-secondary)',
+                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                  fontWeight: 500,
                 }}>
-                <div style={{ width: 48, height: 48, borderRadius: 'var(--radius-lg)', background: feat.bg, display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: 'var(--space-md)' }}>
-                  <feat.icon size={22} style={{ color: feat.color }} strokeWidth={1.5} />
-                </div>
-                <div style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--c-text-primary)', marginBottom: 6 }}>{feat.name}</div>
-                <div style={{ fontSize: '0.8125rem', color: 'var(--c-text-secondary)', lineHeight: 1.5 }}>{feat.desc}</div>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginTop: 'var(--space-md)', fontSize: '0.75rem', fontWeight: 600, color: feat.color }}>
-                  Launch <ArrowRight size={12} />
-                </div>
-              </button>
-            ))}
+                  {selectedDoc.title}
+                </span>
+              </div>
+            )}
           </div>
 
-          {/* Stats */}
-          {selectedDoc && (
-            <div className="bento-card animate-fade-in-up stagger-5" style={{ marginTop: 'var(--space-lg)', padding: 'var(--space-lg)' }}>
-              <div style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--c-text-primary)', marginBottom: 'var(--space-md)' }}>
-                Document Intelligence
-              </div>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 'var(--space-md)' }}>
-                {[
-                  { label: 'Words', value: selectedDoc.metadata?.word_count?.toLocaleString() || '0', icon: FileText, color: '#6366f1' },
-                  { label: 'Chunks', value: selectedDoc.metadata?.chunk_count || '0', icon: Layers, color: '#8b5cf6' },
-                  { label: 'Language', value: (selectedDoc.language || 'unknown').toUpperCase(), icon: Brain, color: '#10b981' },
-                  { label: 'Status', value: 'Ready', icon: Zap, color: '#f59e0b' },
-                ].map(stat => (
-                  <div key={stat.label} style={{ textAlign: 'center' }}>
-                    <stat.icon size={16} style={{ color: stat.color, marginBottom: 6 }} />
-                    <div style={{ fontSize: '1.125rem', fontWeight: 700, color: 'var(--c-text-primary)' }}>{stat.value}</div>
-                    <div style={{ fontSize: '0.6875rem', color: 'var(--c-text-tertiary)', fontWeight: 500 }}>{stat.label}</div>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
+          {/* Tab Content */}
+          <div style={{
+            flex: 1, minHeight: 0,
+            display: 'flex', flexDirection: 'column',
+          }}>
+            {renderContent()}
+          </div>
         </div>
       </div>
     </div>

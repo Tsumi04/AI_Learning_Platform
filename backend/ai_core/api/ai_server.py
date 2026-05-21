@@ -14,7 +14,7 @@ import traceback
 import pickle
 from pathlib import Path
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
@@ -44,9 +44,12 @@ from knowledge.concept_extractor import ConceptExtractor
 from knowledge.graph_builder import KnowledgeGraphBuilder
 from generation.quiz_generator import QuizGenerator
 from generation.flashcard_generator import FlashcardGenerator
-from adaptive.spaced_repetition import FSRS
+from adaptive.spaced_repetition import FSRSv6
 from adaptive.deep_knowledge_tracer import DeepKnowledgeTracer
 from retrieval.cross_encoder_reranker import CrossEncoderReranker
+from generation.summary_generator import SummaryGenerator
+from learning.path_optimizer import LearningPathOptimizer
+from nlp.vietnamese import VietnameseNLP
 
 # ──── Lifespan (startup/shutdown) ────
 @asynccontextmanager
@@ -84,9 +87,12 @@ concept_extractor = ConceptExtractor()
 graph_builder = KnowledgeGraphBuilder()
 quiz_generator = QuizGenerator()
 flashcard_generator = FlashcardGenerator()
-fsrs = FSRS()
+fsrs = FSRSv6()
 dkt = DeepKnowledgeTracer()
 cross_encoder = CrossEncoderReranker()
+summary_generator = SummaryGenerator()
+path_optimizer = LearningPathOptimizer()
+vi_nlp = VietnameseNLP()
 
 # LLM Engine (connects to local Ollama)
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
@@ -632,27 +638,585 @@ def adaptive_difficulty(request: KTQueryRequest):
     }
 
 
+# ──── Summary Endpoint ────
+
+class SummaryRequest(BaseModel):
+    document_id: str
+    num_sentences: int = 5
+    use_mmr: bool = True
+
+
+@app.post("/api/summary")
+def generate_summary(request: SummaryRequest):
+    """Generate extractive summary of a document."""
+    doc_id = request.document_id
+
+    store = get_doc_store(doc_id)
+    if not store:
+        raise HTTPException(status_code=404, detail="Document not indexed.")
+
+    chunks = store["chunks"]
+    full_text = " ".join(c["text"] for c in chunks)
+
+    result = summary_generator.summarize(
+        text=full_text,
+        num_sentences=request.num_sentences,
+        use_mmr=request.use_mmr,
+    )
+
+    return {
+        "document_id": doc_id,
+        **result,
+    }
+
+
+# ──── Learning Path Endpoints ────
+
+class LearningPathRequest(BaseModel):
+    document_id: str
+    learner_id: str
+    num_recommendations: int = 5
+
+
+@app.post("/api/learning-path")
+def get_learning_path(request: LearningPathRequest):
+    """Get optimized learning path for a document."""
+    doc_id = request.document_id
+
+    store = get_doc_store(doc_id)
+    if not store:
+        raise HTTPException(status_code=404, detail="Document not indexed.")
+
+    chunks = store["chunks"]
+    all_text = " ".join(c["text"] for c in chunks)
+    concepts = concept_extractor.extract(all_text)
+    graph = graph_builder.build(chunks, doc_id, request.learner_id)
+
+    # Get current mastery from DKT
+    mastery = {}
+    for node in graph["nodes"]:
+        mastery[node["concept"]] = dkt.predict_mastery(
+            request.learner_id, node["concept"]
+        )
+
+    # Get recommendations
+    recs = path_optimizer.get_next_concepts(
+        concepts=graph["nodes"],
+        edges=graph["edges"],
+        mastery=mastery,
+        n=request.num_recommendations,
+    )
+
+    return {
+        "document_id": doc_id,
+        "learner_id": request.learner_id,
+        "recommendations": recs,
+        "total_concepts": len(graph["nodes"]),
+    }
+
+
+class StudyPlanRequest(BaseModel):
+    document_id: str
+    learner_id: str
+    days: int = 7
+
+
+@app.post("/api/study-plan")
+def generate_study_plan(request: StudyPlanRequest):
+    """Generate daily study plan."""
+    doc_id = request.document_id
+
+    store = get_doc_store(doc_id)
+    if not store:
+        raise HTTPException(status_code=404, detail="Document not indexed.")
+
+    chunks = store["chunks"]
+    graph = graph_builder.build(chunks, doc_id, request.learner_id)
+
+    mastery = {}
+    for node in graph["nodes"]:
+        mastery[node["concept"]] = dkt.predict_mastery(
+            request.learner_id, node["concept"]
+        )
+
+    plan = path_optimizer.generate_study_plan(
+        concepts=graph["nodes"],
+        edges=graph["edges"],
+        mastery=mastery,
+        days=request.days,
+    )
+
+    return {
+        "document_id": doc_id,
+        "learner_id": request.learner_id,
+        "plan": plan,
+    }
+
+
+# ──── Agentic AI: Tutor Agent ────
+
+from agents.tutor_agent import TutorAgent
+from agents.assessment_agent import AssessmentAgent
+from agents.feedback_agent import FeedbackAgent
+from agents.path_planning_agent import PathPlanningAgent
+from agents.registry import AgentRegistry
+from agents.orchestrator import AgentOrchestrator
+
+# RAG pipeline factory — tạo RAG pipeline cho document cụ thể
+def _rag_pipeline_factory(doc_id: str):
+    """Factory tạo RAG pipeline từ doc_stores cho TutorAgent."""
+    store = get_doc_store(doc_id)
+    if not store:
+        return None
+    rag = RAGPipeline(
+        embedding_engine=store["embedding_engine"],
+        vector_store=store["vector_store"],
+        bm25=store["bm25"],
+        llm_engine=llm_engine,
+        language=store["language"],
+    )
+    rag.chunk_texts = {c["chunk_id"]: c["text"] for c in store["chunks"]}
+    return rag
+
+# Khởi tạo Agent system
+agent_registry = AgentRegistry()
+tutor_agent = TutorAgent(
+    llm_engine=llm_engine,
+    dkt=dkt,
+    concept_extractor=concept_extractor,
+    rag_pipeline_factory=_rag_pipeline_factory,
+)
+agent_registry.register(tutor_agent)
+
+assessment_agent = AssessmentAgent(
+    llm_engine=llm_engine,
+    dkt=dkt,
+    quiz_generator=quiz_generator,
+    doc_store_func=get_doc_store,
+)
+agent_registry.register(assessment_agent)
+
+feedback_agent = FeedbackAgent(
+    llm_engine=llm_engine,
+    dkt=dkt,
+)
+agent_registry.register(feedback_agent)
+
+path_planning_agent = PathPlanningAgent(
+    llm_engine=llm_engine,
+    path_optimizer=path_optimizer,
+    dkt=dkt,
+    graph_builder=graph_builder,
+    doc_store_func=get_doc_store,
+)
+agent_registry.register(path_planning_agent)
+
+agent_orchestrator = AgentOrchestrator(
+    registry=agent_registry,
+    llm_engine=llm_engine,
+    enable_safety=True,
+)
+
+
+class AgentAskRequest(BaseModel):
+    query: str
+    learner_id: str = "anonymous"
+    document_id: str = ""
+    conversation_id: str = ""
+    language: str = ""
+
+
+@app.post("/api/agent/ask")
+def agent_ask(request: AgentAskRequest):
+    """Unified Agent Ask endpoint — Orchestrator tự động chọn agent."""
+    result = agent_orchestrator.process_user_request(
+        query=request.query,
+        learner_id=request.learner_id,
+        document_id=request.document_id,
+        conversation_id=request.conversation_id,
+        language=request.language,
+    )
+    return result
+
+
+@app.post("/api/agent/ask/stream")
+def agent_ask_stream(request: AgentAskRequest):
+    """
+    Unified Agent Ask — SSE streaming mode.
+    Stream response token-by-token cho real-time UX.
+    
+    SSE Events:
+    - {type: "meta", ...}     → metadata trước khi stream bắt đầu
+    - {type: "token", content} → từng token
+    - {type: "done", ...}     → kết thúc + metadata đầy đủ
+    - {type: "error", error}  → lỗi
+    """
+    import asyncio
+
+    # Validate query
+    if not request.query or not request.query.strip():
+        raise HTTPException(status_code=400, detail="Query is required.")
+
+    def event_stream():
+        try:
+            # Step 1: Chuẩn bị context (giống process_user_request nhưng tách streaming)
+            context = agent_orchestrator._get_or_create_context(
+                conversation_id=request.conversation_id,
+                learner_id=request.learner_id,
+                document_id=request.document_id,
+                language=request.language,
+            )
+            context.add_turn(role="user", content=request.query)
+
+            # Step 2: Classify intent
+            intent = agent_orchestrator._classify_intent(request.query, context)
+
+            # Step 3: Select agent — ưu tiên tutor
+            agent = agent_orchestrator._select_agent(intent, context)
+            if not agent:
+                agent = tutor_agent
+
+            # Send metadata event
+            lang = request.language or agent_orchestrator._detect_language(request.query)
+            meta_event = json.dumps({
+                "type": "meta",
+                "intent": intent,
+                "agent_id": agent.agent_id,
+                "conversation_id": context.conversation_id,
+            })
+            yield f"data: {meta_event}\n\n"
+
+            # Step 4: Build messages cho LLM (giống TutorAgent.process nhưng tách streaming)
+            query = request.query
+            turn_count = context.get_scratch(agent.agent_id, "turn_count", 0) + 1
+            context.set_scratch(agent.agent_id, "turn_count", turn_count)
+
+            # Frustration detection
+            frustration = 0.0
+            if hasattr(agent, '_detect_frustration'):
+                frustration = agent._detect_frustration(query, context)
+                context.set_scratch(agent.agent_id, "frustration_level", frustration)
+
+            # Effort gate check
+            if hasattr(agent, '_is_direct_answer_request') and hasattr(agent, '_effort_gate_response'):
+                if turn_count <= 2 and agent._is_direct_answer_request(query) and frustration < 0.6:
+                    gate = agent._effort_gate_response(query, lang)
+                    token_event = json.dumps({"type": "token", "content": gate.content})
+                    yield f"data: {token_event}\n\n"
+                    done_event = json.dumps({
+                        "type": "done",
+                        "data": gate.data,
+                        "suggestions": [],
+                    })
+                    yield f"data: {done_event}\n\n"
+                    return
+
+            # Socratic phase
+            phase = "eliciting"
+            if hasattr(agent, '_detect_socratic_phase'):
+                phase = agent._detect_socratic_phase(query, context)
+                if frustration >= 0.7:
+                    phase = "encouraging"
+                context.set_scratch(agent.agent_id, "socratic_phase", phase)
+
+            # RAG context
+            rag_context = ""
+            if hasattr(agent, '_get_rag_context'):
+                rag_context = agent._get_rag_context(query, context)
+
+            # Concepts
+            concepts = []
+            if hasattr(agent, '_extract_query_concepts'):
+                concepts = agent._extract_query_concepts(query)
+
+            # System prompt
+            system_prompt = agent.get_system_prompt(context)
+            messages = [{"role": "system", "content": system_prompt}]
+
+            if rag_context:
+                rag_header = "Tài liệu tham khảo" if lang == "vi" else "Reference material"
+                messages.append({"role": "system", "content": f"{rag_header}:\n{rag_context}"})
+
+            # Session note
+            if hasattr(agent, '_build_session_note'):
+                session_note = agent._build_session_note(context, frustration, lang)
+                if session_note:
+                    messages.append({"role": "system", "content": session_note})
+
+            # Conversation history
+            history = context.get_llm_messages(last_n=8)
+            messages.extend(history)
+            if not history or history[-1].get("content") != query:
+                messages.append({"role": "user", "content": query})
+
+            # Step 5: Stream từ LLM
+            scaffolding_level = "intermediate"
+            if hasattr(agent, '_get_scaffolding_level'):
+                scaffolding_level = agent._get_scaffolding_level(context)
+
+            if llm_engine.is_available():
+                full_response = ""
+                for token in llm_engine.chat_stream(messages):
+                    full_response += token
+                    token_event = json.dumps({"type": "token", "content": token})
+                    yield f"data: {token_event}\n\n"
+
+                # Post-process: encouragement
+                if hasattr(agent, '_maybe_add_encouragement'):
+                    from agents.tutor_agent import SCAFFOLDING_CONFIG
+                    config = SCAFFOLDING_CONFIG.get(scaffolding_level, SCAFFOLDING_CONFIG["intermediate"])
+                    processed = agent._maybe_add_encouragement(full_response, context, config)
+                    if processed != full_response:
+                        # Stream thêm phần encouragement (đã prepend)
+                        extra = processed[: len(processed) - len(full_response)]
+                        if extra:
+                            extra_event = json.dumps({"type": "token", "content": extra})
+                            yield f"data: {extra_event}\n\n"
+                        full_response = processed
+
+                # Update conversation context
+                context.add_turn(
+                    role="assistant",
+                    content=full_response,
+                    agent_id=agent.agent_id,
+                )
+            else:
+                # Offline fallback
+                if hasattr(agent, '_generate_offline_response'):
+                    offline = agent._generate_offline_response(query, context, phase)
+                    full_response = offline.content
+                else:
+                    full_response = "AI đang offline. Khởi động Ollama để sử dụng." if lang == "vi" \
+                        else "AI is offline. Start Ollama to use."
+                token_event = json.dumps({"type": "token", "content": full_response})
+                yield f"data: {token_event}\n\n"
+
+            # Step 6: Generate suggestions
+            suggestions = []
+            if hasattr(agent, '_generate_suggestions'):
+                suggestions = agent._generate_suggestions(query, phase, lang)
+
+            # Done event
+            done_event = json.dumps({
+                "type": "done",
+                "data": {
+                    "socratic_phase": phase,
+                    "scaffolding_level": scaffolding_level,
+                    "active_concepts": concepts[:5] if concepts else [],
+                    "has_rag_context": bool(rag_context),
+                    "turn_count": turn_count,
+                    "frustration_level": round(frustration, 2),
+                },
+                "suggestions": suggestions,
+                "conversation_id": context.conversation_id,
+            })
+            yield f"data: {done_event}\n\n"
+
+        except Exception as e:
+            traceback.print_exc()
+            error_event = json.dumps({"type": "error", "error": str(e)})
+            yield f"data: {error_event}\n\n"
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@app.websocket("/api/agent/ws")
+async def agent_websocket(websocket: WebSocket):
+    """
+    WebSocket endpoint cho real-time chat với Agent Orchestrator.
+    Nhận message dạng JSON: { query, learner_id, document_id, conversation_id, language }
+    Trả về stream tokens và metadata tương tự SSE nhưng qua WebSocket.
+    """
+    await websocket.accept()
+    try:
+        while True:
+            data = await websocket.receive_json()
+            query = data.get("query")
+            if not query or not query.strip():
+                await websocket.send_json({"type": "error", "error": "Query is required."})
+                continue
+            
+            learner_id = data.get("learner_id", "anonymous")
+            document_id = data.get("document_id", "")
+            conversation_id = data.get("conversation_id", "")
+            language = data.get("language", "")
+            
+            try:
+                # Step 1: Chuẩn bị context
+                context = agent_orchestrator._get_or_create_context(
+                    conversation_id=conversation_id,
+                    learner_id=learner_id,
+                    document_id=document_id,
+                    language=language,
+                )
+                context.add_turn(role="user", content=query)
+                
+                # Step 2: Classify intent
+                intent = agent_orchestrator._classify_intent(query, context)
+                
+                # Step 3: Select agent
+                agent = agent_orchestrator._select_agent(intent, context)
+                if not agent:
+                    agent = tutor_agent
+                
+                lang = language or agent_orchestrator._detect_language(query)
+                await websocket.send_json({
+                    "type": "meta",
+                    "intent": intent,
+                    "agent_id": agent.agent_id,
+                    "conversation_id": context.conversation_id,
+                })
+                
+                turn_count = context.get_scratch(agent.agent_id, "turn_count", 0) + 1
+                context.set_scratch(agent.agent_id, "turn_count", turn_count)
+                
+                frustration = 0.0
+                if hasattr(agent, '_detect_frustration'):
+                    frustration = agent._detect_frustration(query, context)
+                    context.set_scratch(agent.agent_id, "frustration_level", frustration)
+                
+                # Effort gate check
+                if hasattr(agent, '_is_direct_answer_request') and hasattr(agent, '_effort_gate_response'):
+                    if turn_count <= 2 and agent._is_direct_answer_request(query) and frustration < 0.6:
+                        gate = agent._effort_gate_response(query, lang)
+                        await websocket.send_json({"type": "token", "content": gate.content})
+                        await websocket.send_json({
+                            "type": "done",
+                            "data": gate.data,
+                            "suggestions": [],
+                            "conversation_id": context.conversation_id
+                        })
+                        continue
+                
+                # Phase
+                phase = "eliciting"
+                if hasattr(agent, '_detect_socratic_phase'):
+                    phase = agent._detect_socratic_phase(query, context)
+                    if frustration >= 0.7:
+                        phase = "encouraging"
+                    context.set_scratch(agent.agent_id, "socratic_phase", phase)
+                
+                # RAG context
+                rag_context = ""
+                if hasattr(agent, '_get_rag_context'):
+                    rag_context = agent._get_rag_context(query, context)
+                
+                concepts = []
+                if hasattr(agent, '_extract_query_concepts'):
+                    concepts = agent._extract_query_concepts(query)
+                
+                # System prompt
+                system_prompt = agent.get_system_prompt(context)
+                messages = [{"role": "system", "content": system_prompt}]
+                
+                if rag_context:
+                    rag_header = "Tài liệu tham khảo" if lang == "vi" else "Reference material"
+                    messages.append({"role": "system", "content": f"{rag_header}:\n{rag_context}"})
+                
+                if hasattr(agent, '_build_session_note'):
+                    session_note = agent._build_session_note(context, frustration, lang)
+                    if session_note:
+                        messages.append({"role": "system", "content": session_note})
+                
+                history = context.get_llm_messages(last_n=8)
+                messages.extend(history)
+                if not history or history[-1].get("content") != query:
+                    messages.append({"role": "user", "content": query})
+                
+                scaffolding_level = "intermediate"
+                if hasattr(agent, '_get_scaffolding_level'):
+                    scaffolding_level = agent._get_scaffolding_level(context)
+                
+                if llm_engine.is_available():
+                    full_response = ""
+                    for token in llm_engine.chat_stream(messages):
+                        full_response += token
+                        await websocket.send_json({"type": "token", "content": token})
+                    
+                    if hasattr(agent, '_maybe_add_encouragement'):
+                        from agents.tutor_agent import SCAFFOLDING_CONFIG
+                        config = SCAFFOLDING_CONFIG.get(scaffolding_level, SCAFFOLDING_CONFIG["intermediate"])
+                        processed = agent._maybe_add_encouragement(full_response, context, config)
+                        if processed != full_response:
+                            extra = processed[: len(processed) - len(full_response)]
+                            if extra:
+                                await websocket.send_json({"type": "token", "content": extra})
+                            full_response = processed
+                    
+                    context.add_turn(
+                        role="assistant",
+                        content=full_response,
+                        agent_id=agent.agent_id,
+                    )
+                else:
+                    if hasattr(agent, '_generate_offline_response'):
+                        offline = agent._generate_offline_response(query, context, phase)
+                        full_response = offline.content
+                    else:
+                        full_response = "AI đang offline. Khởi động Ollama để sử dụng." if lang == "vi" \
+                            else "AI is offline. Start Ollama to use."
+                    await websocket.send_json({"type": "token", "content": full_response})
+                
+                suggestions = []
+                if hasattr(agent, '_generate_suggestions'):
+                    suggestions = agent._generate_suggestions(query, phase, lang)
+                
+                await websocket.send_json({
+                    "type": "done",
+                    "data": {
+                        "socratic_phase": phase,
+                        "scaffolding_level": scaffolding_level,
+                        "active_concepts": concepts[:5] if concepts else [],
+                        "has_rag_context": bool(rag_context),
+                        "turn_count": turn_count,
+                        "frustration_level": round(frustration, 2),
+                    },
+                    "suggestions": suggestions,
+                    "conversation_id": context.conversation_id,
+                })
+                
+            except Exception as e:
+                import traceback
+                traceback.print_exc()
+                await websocket.send_json({"type": "error", "error": str(e)})
+
+    except WebSocketDisconnect:
+        print("[AI Core] Agent WebSocket disconnected")
+
+
+@app.get("/api/agent/status")
+def agent_status():
+    """Trạng thái Agent system."""
+    return agent_orchestrator.get_status()
+
+
+
 # ──── Run ────
 if __name__ == "__main__":
     import uvicorn
     print("""
 ======================================================
-     NEUROVAULT AI Core v4.0 - Gemma 4 E4B
+     NEUROVAULT AI Core v5.1 — Phase 3 Agentic AI
      Running on port 8000
-     100% Local - White-Box AI
+     100% Local — White-Box AI
 
-     Modules:
+     Modules (v2):
        - Document Processing Pipeline
-       - TF-IDF Embedding Engine
-       - BM25 + Vector Hybrid Retrieval
-       - Cross-Encoder Reranker
-       - RAG Pipeline (Ollama/Gemma 4)
+       - Embedding Engine v2 (Truncated SVD)
+       - BM25 + Vector + Cross-Encoder Retrieval
+       - RAG Pipeline v2 (Gemma 4 / Ollama)
        - Streaming SSE Chat
-       - Knowledge Graph Builder
-       - Quiz & Flashcard Generator
-       - FSRS Spaced Repetition
-       - Deep Knowledge Tracing (DKT)
+       - Knowledge Graph v2 (PageRank + Relations)
+       - Quiz Generator v2 (Bloom's Taxonomy)
+       - Flashcard Generator v2 (FSRS metadata)
+       - Summary Generator v2 (TextRank + MMR)
+       - FSRS v6 (17 weights)
+       - Deep Knowledge Tracing v2
+       - Learning Path Optimizer (ZPD)
+       - Vietnamese NLP (500+ stopwords)
        - Data Persistence (pickle/disk)
+       - Agentic AI: Tutor Agent (Socratic)
 ======================================================
     """)
     uvicorn.run(app, host="0.0.0.0", port=8000)
+

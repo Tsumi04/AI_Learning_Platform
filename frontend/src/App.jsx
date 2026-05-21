@@ -5,15 +5,18 @@ import Dashboard from './pages/Dashboard';
 import DocumentsPage from './pages/DocumentsPage';
 import AIStudioPage from './pages/AIStudioPage';
 import DocumentDetail from './pages/DocumentDetail';
+import KnowledgeGraphPage from './pages/KnowledgeGraphPage';
 import Login from './pages/Login';
 import Register from './pages/Register';
 import Profile from './pages/Profile';
 import GoogleCallback from './pages/GoogleCallback';
 import useAuthStore from './store/useAuthStore';
+import { ToastProvider } from './components/ui/Toast';
+import { ErrorBoundary } from './components/ui/ErrorBoundary';
 import { Sparkles } from 'lucide-react';
 
 // ═══ DEV BYPASS: Set true to skip login ═══
-const DEV_BYPASS_AUTH = true;
+const DEV_BYPASS_AUTH = false;
 
 function ProtectedRoute({ children }) {
   const { isAuthenticated, isLoading } = useAuthStore();
@@ -88,22 +91,39 @@ function App() {
   }, [initialize]);
 
   return (
-    <BrowserRouter>
-      <Routes>
-        <Route path="/login" element={<Login />} />
-        <Route path="/register" element={<Register />} />
-        <Route path="/auth/google/callback" element={<GoogleCallback />} />
-        
-        <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
-          <Route index element={<Navigate to="/dashboard" replace />} />
-          <Route path="dashboard" element={<Dashboard />} />
-          <Route path="documents" element={<DocumentsPage />} />
-          <Route path="documents/:id" element={<DocumentDetail />} />
-          <Route path="ai-studio" element={<AIStudioPage />} />
-          <Route path="profile" element={<Profile />} />
-        </Route>
-      </Routes>
-    </BrowserRouter>
+    <ErrorBoundary>
+      <ToastProvider maxToasts={5}>
+        <BrowserRouter>
+          <Routes>
+            <Route path="/login" element={<Login />} />
+            <Route path="/register" element={<Register />} />
+            <Route path="/auth/google/callback" element={<GoogleCallback />} />
+            
+            <Route path="/" element={<ProtectedRoute><Layout /></ProtectedRoute>}>
+              <Route index element={<Navigate to="/dashboard" replace />} />
+              <Route path="dashboard" element={
+                <ErrorBoundary minimal><Dashboard /></ErrorBoundary>
+              } />
+              <Route path="documents" element={
+                <ErrorBoundary minimal><DocumentsPage /></ErrorBoundary>
+              } />
+              <Route path="documents/:id" element={
+                <ErrorBoundary minimal><DocumentDetail /></ErrorBoundary>
+              } />
+              <Route path="ai-studio" element={
+                <ErrorBoundary minimal><AIStudioPage /></ErrorBoundary>
+              } />
+              <Route path="knowledge-graph" element={
+                <ErrorBoundary minimal><KnowledgeGraphPage /></ErrorBoundary>
+              } />
+              <Route path="profile" element={
+                <ErrorBoundary minimal><Profile /></ErrorBoundary>
+              } />
+            </Route>
+          </Routes>
+        </BrowserRouter>
+      </ToastProvider>
+    </ErrorBoundary>
   );
 }
 

@@ -1,160 +1,178 @@
-import { useState } from 'react';
+/**
+ * Profile v2 — Trang hồ sơ người dùng premium
+ * Layout: ProfileHeader → Stats Grid → 2-column (Mastery+Activity | Preferences+Account+Export)
+ * Data: Fetch từ /api/learning/profile-stats, user từ Zustand store
+ */
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import useAuthStore from '../store/useAuthStore';
-import { User, Mail, Lock, Shield, LogOut, Sparkles, Check, AlertCircle } from 'lucide-react';
+import { learningAPI } from '../services/api';
+import { LogOut } from 'lucide-react';
+
+import ProfileHeader from '../components/profile/ProfileHeader';
+import LearningStatsGrid from '../components/profile/LearningStatsGrid';
+import MasteryOverviewCard from '../components/profile/MasteryOverviewCard';
+import ActivityBreakdownCard from '../components/profile/ActivityBreakdownCard';
+import MilestonesCard from '../components/profile/MilestonesCard';
+import PreferencesCard from '../components/profile/PreferencesCard';
+import AccountSettingsCard from '../components/profile/AccountSettingsCard';
+import DataExportCard from '../components/profile/DataExportCard';
 
 export default function Profile() {
   const { user, logout, updateProfile, changePassword, isLoading } = useAuthStore();
   const navigate = useNavigate();
-  const [formData, setFormData] = useState({
-    name: user?.name || '', email: user?.email || '',
-    currentPassword: '', newPassword: '',
-  });
-  const [saveStatus, setSaveStatus] = useState(null); // 'success' | 'error' | null
-  const [statusMessage, setStatusMessage] = useState('');
 
-  const handleChange = (e) => setFormData({ ...formData, [e.target.name]: e.target.value });
-  const handleLogout = () => { logout(); navigate('/login'); };
+  // Profile stats from backend
+  const [profileStats, setProfileStats] = useState(null);
+  const [statsLoading, setStatsLoading] = useState(true);
 
-  const handleSaveProfile = async (e) => {
-    e.preventDefault();
-    setSaveStatus(null);
-
-    // Save profile info
-    if (formData.name !== user?.name || formData.email !== user?.email) {
-      const result = await updateProfile({
-        name: formData.name,
-        email: formData.email,
-      });
-      if (!result.success) {
-        setSaveStatus('error');
-        setStatusMessage(result.error || 'Failed to update profile');
-        return;
+  useEffect(() => {
+    const fetchStats = async () => {
+      setStatsLoading(true);
+      try {
+        const data = await learningAPI.getProfileStats();
+        setProfileStats(data);
+      } catch {
+        // Graceful fallback — page vẫn hiển thị user info từ store
+      } finally {
+        setStatsLoading(false);
       }
-    }
+    };
+    fetchStats();
+  }, []);
 
-    // Change password if provided
-    if (formData.currentPassword && formData.newPassword) {
-      const result = await changePassword(formData.currentPassword, formData.newPassword);
-      if (!result.success) {
-        setSaveStatus('error');
-        setStatusMessage(result.error || 'Failed to change password');
-        return;
-      }
-      setFormData(prev => ({ ...prev, currentPassword: '', newPassword: '' }));
-    }
-
-    setSaveStatus('success');
-    setStatusMessage('Changes saved successfully');
-    setTimeout(() => setSaveStatus(null), 3000);
+  const handleLogout = () => {
+    logout();
+    navigate('/login');
   };
 
   return (
-    <div className="animate-fade-in-up" style={{ maxWidth: 900, margin: '0 auto' }}>
-      <div style={{ marginBottom: 'var(--space-2xl)' }}>
-        <h1 style={{ fontSize: '1.5rem', fontWeight: 700, color: 'var(--c-text-primary)', letterSpacing: '-0.02em' }}>Profile Settings</h1>
-        <p style={{ fontSize: '0.9375rem', color: 'var(--c-text-secondary)', marginTop: 4 }}>Manage your account and preferences.</p>
+    <div className="animate-fade-in-up" style={{ maxWidth: 1100, margin: '0 auto' }}>
+      {/* Page title */}
+      <div style={{ marginBottom: 'var(--space-xl)' }}>
+        <h1 style={{
+          fontSize: '1.5rem', fontWeight: 700,
+          color: 'var(--c-text-primary)',
+          letterSpacing: '-0.02em',
+        }}>
+          Profile
+        </h1>
+        <p style={{
+          fontSize: '0.9375rem',
+          color: 'var(--c-text-secondary)',
+          marginTop: 4,
+        }}>
+          Manage your account, track your learning progress, and customize preferences.
+        </p>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 2fr', gap: 'var(--space-lg)' }}>
-        {/* Left — Avatar Card */}
-        <div className="bento-card" style={{ padding: 'var(--space-xl)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 'var(--space-md)' }}>
-          <div style={{ position: 'relative', cursor: 'pointer' }}>
-            <div style={{ width: 80, height: 80, borderRadius: 'var(--radius-xl)', background: 'var(--c-accent-gradient)', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'white', fontSize: '1.75rem', fontWeight: 700, boxShadow: '0 8px 24px rgba(99, 102, 241, 0.25)' }}>
-              {user?.avatar || user?.name?.charAt(0)?.toUpperCase() || 'A'}
-            </div>
-          </div>
-          <div style={{ textAlign: 'center' }}>
-            <div style={{ fontSize: '1.0625rem', fontWeight: 600, color: 'var(--c-text-primary)' }}>{user?.name || 'User'}</div>
-            <div style={{ fontSize: '0.8125rem', color: 'var(--c-text-tertiary)', marginTop: 2 }}>{user?.email || 'user@example.com'}</div>
-          </div>
-          <div style={{ width: '100%', height: 1, background: 'var(--c-border)', margin: 'var(--space-sm) 0' }}/>
+      {/* ── Profile Header ── */}
+      <div style={{ marginBottom: 'var(--space-lg)' }}>
+        <ProfileHeader
+          user={user}
+          joinDate={profileStats?.joinDate}
+          neuralProfile={profileStats?.neuralProfile || user?.neural_profile}
+        />
+      </div>
 
-          {/* Neural Profile Stats */}
-          <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8125rem' }}>
-              <span style={{ color: 'var(--c-text-tertiary)' }}>Concepts Mastered</span>
-              <span style={{ color: 'var(--c-text-primary)', fontWeight: 600 }}>{user?.neural_profile?.total_concepts_mastered || 0}</span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8125rem' }}>
-              <span style={{ color: 'var(--c-text-tertiary)' }}>Study Time</span>
-              <span style={{ color: 'var(--c-text-primary)', fontWeight: 600 }}>{Math.round((user?.neural_profile?.total_study_time_minutes || 0) / 60)}h</span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8125rem' }}>
-              <span style={{ color: 'var(--c-text-tertiary)' }}>Learning Velocity</span>
-              <span style={{ color: 'var(--c-text-primary)', fontWeight: 600 }}>{user?.neural_profile?.learning_velocity?.toFixed(2) || '1.00'}x</span>
-            </div>
-          </div>
-
-          <div style={{ width: '100%', height: 1, background: 'var(--c-border)', margin: 'var(--space-sm) 0' }}/>
-
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: '0.8125rem', fontWeight: 500, color: 'var(--c-success)', background: 'var(--c-success-glow)', padding: '0.5rem 1rem', borderRadius: 'var(--radius-full)', width: '100%', justifyContent: 'center' }}>
-            <Shield size={14}/> {user?.role === 'admin' ? 'Admin' : 'Active Member'}
-          </div>
-          <button onClick={handleLogout} className="btn btn-danger" style={{ width: '100%' }}>
-            <LogOut size={14}/> Sign Out
-          </button>
+      {/* ── Learning Stats Grid ── */}
+      {statsLoading ? (
+        <div style={{
+          display: 'grid',
+          gridTemplateColumns: 'repeat(3, 1fr)',
+          gap: 'var(--space-md)',
+          marginBottom: 'var(--space-lg)',
+        }}>
+          {[...Array(6)].map((_, i) => (
+            <div key={i} className="skeleton" style={{ height: 110, borderRadius: 'var(--radius-xl)' }} />
+          ))}
         </div>
+      ) : (
+        <div style={{ marginBottom: 'var(--space-lg)' }}>
+          <LearningStatsGrid overview={profileStats?.overview} />
+        </div>
+      )}
 
-        {/* Right — Form */}
-        <form className="bento-card" style={{ padding: 'var(--space-xl)' }} onSubmit={handleSaveProfile}>
-          {/* Status Message */}
-          {saveStatus && (
-            <div className="animate-fade-in" style={{
-              padding: '0.75rem 1rem',
-              borderRadius: 'var(--radius-md)',
-              marginBottom: 'var(--space-lg)',
-              display: 'flex', alignItems: 'center', gap: 8,
-              background: saveStatus === 'success' ? 'var(--c-success-glow)' : 'var(--c-error-glow)',
-              color: saveStatus === 'success' ? 'var(--c-success)' : 'var(--c-error)',
-              fontSize: '0.8125rem', fontWeight: 500,
+      {/* ── 2-Column Layout: Left (Mastery + Activity + Milestones) | Right (Preferences + Account + Export) ── */}
+      <div className="profile-two-col" style={{
+        display: 'grid',
+        gridTemplateColumns: '1fr 1fr',
+        gap: 'var(--space-lg)',
+        alignItems: 'start',
+      }}>
+        {/* Left column */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-lg)' }}>
+          {statsLoading ? (
+            <>
+              <div className="skeleton" style={{ height: 260, borderRadius: 'var(--radius-xl)' }} />
+              <div className="skeleton" style={{ height: 200, borderRadius: 'var(--radius-xl)' }} />
+            </>
+          ) : profileStats ? (
+            <>
+              <MasteryOverviewCard masteryBreakdown={profileStats?.masteryBreakdown} />
+              <ActivityBreakdownCard activityByType={profileStats?.activityByType} />
+              <MilestonesCard milestones={profileStats?.milestones} />
+            </>
+          ) : (
+            <div className="bento-card" style={{
+              padding: 'var(--space-2xl)',
+              textAlign: 'center',
+              display: 'flex',
+              flexDirection: 'column',
+              alignItems: 'center',
+              gap: 'var(--space-md)',
             }}>
-              {saveStatus === 'success' ? <Check size={14} /> : <AlertCircle size={14} />}
-              {statusMessage}
+              <div style={{
+                width: 56, height: 56,
+                borderRadius: 'var(--radius-xl)',
+                background: 'var(--c-accent-glow)',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: '1.5rem',
+              }}>
+                📊
+              </div>
+              <div style={{
+                fontSize: '1rem', fontWeight: 600,
+                color: 'var(--c-text-primary)',
+              }}>
+                Learning Stats
+              </div>
+              <div style={{
+                fontSize: '0.875rem',
+                color: 'var(--c-text-tertiary)',
+                lineHeight: 1.5,
+                maxWidth: 280,
+              }}>
+                Upload documents and start studying to see your mastery progress, activity breakdown, and milestones here.
+              </div>
             </div>
           )}
+        </div>
 
-          <h3 style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--c-text-primary)', marginBottom: 'var(--space-lg)' }}>Personal Information</h3>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-md)', marginBottom: 'var(--space-xl)' }}>
-            <div>
-              <label style={{ fontSize: '0.8125rem', fontWeight: 500, color: 'var(--c-text-secondary)', marginBottom: 6, display: 'block' }}>Full Name</label>
-              <div style={{ position: 'relative' }}>
-                <User size={16} style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: 'var(--c-text-tertiary)' }}/>
-                <input name="name" value={formData.name} onChange={handleChange} className="input" style={{ paddingLeft: '2.5rem' }}/>
-              </div>
-            </div>
-            <div>
-              <label style={{ fontSize: '0.8125rem', fontWeight: 500, color: 'var(--c-text-secondary)', marginBottom: 6, display: 'block' }}>Email</label>
-              <div style={{ position: 'relative' }}>
-                <Mail size={16} style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: 'var(--c-text-tertiary)' }}/>
-                <input name="email" value={formData.email} onChange={handleChange} type="email" className="input" style={{ paddingLeft: '2.5rem' }}/>
-              </div>
-            </div>
-          </div>
-          <div style={{ height: 1, background: 'var(--c-border)', margin: 'var(--space-md) 0 var(--space-lg)' }}/>
-          <h3 style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--c-text-primary)', marginBottom: 'var(--space-lg)' }}>Change Password</h3>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-md)', marginBottom: 'var(--space-lg)' }}>
-            <div>
-              <label style={{ fontSize: '0.8125rem', fontWeight: 500, color: 'var(--c-text-secondary)', marginBottom: 6, display: 'block' }}>Current Password</label>
-              <div style={{ position: 'relative' }}>
-                <Lock size={16} style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: 'var(--c-text-tertiary)' }}/>
-                <input name="currentPassword" value={formData.currentPassword} onChange={handleChange} type="password" placeholder="••••••••" className="input" style={{ paddingLeft: '2.5rem' }}/>
-              </div>
-            </div>
-            <div>
-              <label style={{ fontSize: '0.8125rem', fontWeight: 500, color: 'var(--c-text-secondary)', marginBottom: 6, display: 'block' }}>New Password</label>
-              <div style={{ position: 'relative' }}>
-                <Lock size={16} style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: 'var(--c-text-tertiary)' }}/>
-                <input name="newPassword" value={formData.newPassword} onChange={handleChange} type="password" placeholder="••••••••" className="input" style={{ paddingLeft: '2.5rem' }}/>
-              </div>
-            </div>
-          </div>
-          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
-            <button type="submit" className="btn btn-primary" disabled={isLoading} style={{ opacity: isLoading ? 0.6 : 1 }}>
-              {isLoading ? 'Saving...' : 'Save Changes'}
-            </button>
-          </div>
-        </form>
+        {/* Right column */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-lg)' }}>
+          <PreferencesCard />
+          <AccountSettingsCard
+            user={user}
+            updateProfile={updateProfile}
+            changePassword={changePassword}
+            isLoading={isLoading}
+          />
+          <DataExportCard />
+
+          {/* Logout */}
+          <button
+            id="btn-logout"
+            onClick={handleLogout}
+            className="btn btn-danger"
+            style={{ width: '100%', justifyContent: 'center' }}
+          >
+            <LogOut size={16} />
+            Sign Out
+          </button>
+        </div>
       </div>
     </div>
   );

@@ -2,6 +2,7 @@ import Document from '../models/Document.model.js';
 import config from '../config/env.js';
 import fs from 'fs';
 import path from 'path';
+import axios from 'axios';
 
 /**
  * POST /api/documents/upload
@@ -53,6 +54,7 @@ export const uploadDocument = async (req, res, next) => {
 
 /**
  * Trigger AI Core processing (gọi Python FastAPI server)
+ * Sử dụng axios để nhất quán với ai.routes.js
  */
 async function triggerProcessing(documentId, filePath) {
   try {
@@ -64,21 +66,20 @@ async function triggerProcessing(documentId, filePath) {
 
     const absolutePath = path.resolve(filePath);
 
-    // Gọi AI Core
-    const response = await fetch(`${config.aiCoreUrl}/api/process`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
+    // Gọi AI Core qua axios (nhất quán với ai.routes.js)
+    const response = await axios.post(
+      `${config.aiCoreUrl}/api/process`,
+      {
         document_id: documentId.toString(),
         file_path: absolutePath,
-      }),
-    });
+      },
+      {
+        timeout: 120000, // 2 phút timeout cho xử lý tài liệu lớn
+        headers: { 'Content-Type': 'application/json' },
+      }
+    );
 
-    if (!response.ok) {
-      throw new Error(`AI Core responded with status ${response.status}`);
-    }
-
-    const result = await response.json();
+    const result = response.data;
 
     // Cập nhật document với processed data
     await Document.findByIdAndUpdate(documentId, {
@@ -95,13 +96,16 @@ async function triggerProcessing(documentId, filePath) {
 
     console.log(`[Processing] Document ${documentId} completed: ${result.chunks?.length || 0} chunks`);
   } catch (err) {
+    // Trích xuất error message chi tiết từ axios error
+    const errorMessage = err.response?.data?.detail || err.response?.data?.error || err.message;
+
     // Mark as failed
     await Document.findByIdAndUpdate(documentId, {
       'metadata.processing_status': 'failed',
-      'metadata.processing_error': err.message,
+      'metadata.processing_error': errorMessage,
       'metadata.processing_completed_at': new Date(),
     });
-    throw err;
+    throw new Error(errorMessage);
   }
 }
 

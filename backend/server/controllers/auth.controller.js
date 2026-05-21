@@ -80,6 +80,9 @@ export const login = async (req, res, next) => {
     // Compare password
     const isMatch = await user.comparePassword(password);
     if (!isMatch) {
+      if (!user.password_hash || user.auth_provider === 'google' || user.google_id) {
+        return res.status(401).json({ error: 'This account was created with Google. Please use Google Sign-In.' });
+      }
       return res.status(401).json({ error: 'Invalid email or password.' });
     }
 

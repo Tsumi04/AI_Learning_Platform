@@ -1,16 +1,30 @@
 """
-NEUROVAULT — Flashcard Generator (White-Box)
-Tự tạo flashcards từ concepts + definitions + chunks.
+NEUROVAULT — Flashcard Generator v2 (White-Box)
+Tự tạo flashcards từ concepts + definitions + chunks + LLM.
+
+v2 Improvements:
+- LLM-powered definitions (when available)
+- Multiple card types: Concept, Cloze, Key-Value, Reverse
+- FSRS metadata integration
+- Difficulty estimation per card
+- Tags from knowledge graph
+- Deduplication
 """
 
 import re
-from typing import List, Dict
+import hashlib
+from typing import List, Dict, Optional
 
 
 class FlashcardGenerator:
     """
-    Generate flashcards from document content.
-    Types: Concept-Definition, Cloze Deletion, Key-Value.
+    Generate flashcards v2 from document content.
+
+    Card types:
+    - concept: "What is X?" → definition
+    - cloze: "X is [...] for Y" → missing concept
+    - reverse: definition → "What concept?"
+    - key_value: key fact → explanation
     """
 
     def __init__(self, llm_engine=None):
@@ -21,60 +35,108 @@ class FlashcardGenerator:
         concepts: List[Dict],
         chunks: List[Dict],
         max_cards: int = 20,
+        include_reverse: bool = True,
     ) -> List[Dict]:
-        """Generate flashcards from concepts and chunks."""
+        """
+        Generate flashcards from concepts and chunks.
+
+        Returns list of flashcard dicts with FSRS-ready metadata.
+        """
         cards = []
+        seen_hashes = set()
 
         # 1. Concept-definition cards
         for concept in concepts:
             card = self._concept_card(concept, chunks)
-            if card:
+            if card and self._dedup(card, seen_hashes):
                 cards.append(card)
 
+                # 1b. Reverse cards (definition → concept)
+                if include_reverse:
+                    reverse = self._reverse_card(card)
+                    if reverse and self._dedup(reverse, seen_hashes):
+                        cards.append(reverse)
+
         # 2. Cloze deletion cards
-        for chunk in chunks[:10]:
+        for chunk in chunks[:15]:
             cloze_cards = self._cloze_cards(chunk["text"], concepts)
-            cards.extend(cloze_cards)
+            for card in cloze_cards:
+                if self._dedup(card, seen_hashes):
+                    cards.append(card)
 
-        # Deduplicate and limit
-        seen = set()
-        unique_cards = []
-        for card in cards:
-            key = card["front"][:50]
-            if key not in seen:
-                seen.add(key)
-                unique_cards.append(card)
+        # 3. Key-value cards from patterns
+        for chunk in chunks[:10]:
+            kv_cards = self._key_value_cards(chunk["text"])
+            for card in kv_cards:
+                if self._dedup(card, seen_hashes):
+                    cards.append(card)
 
-        return unique_cards[:max_cards]
+        # 4. LLM-enhanced definitions (if available)
+        if self.llm and hasattr(self.llm, 'is_available') and self.llm.is_available():
+            cards = self._enhance_with_llm(cards)
 
-    def _concept_card(self, concept: Dict, chunks: List[Dict]) -> Dict:
+        # Add FSRS initial metadata + difficulty estimate
+        for i, card in enumerate(cards):
+            card["card_id"] = hashlib.md5(
+                f"{card['front']}{card['back']}".encode()
+            ).hexdigest()[:12]
+            card["difficulty_estimate"] = self._estimate_difficulty(card)
+            card["fsrs"] = {
+                "stability": 0,
+                "difficulty": 5.0,
+                "review_count": 0,
+                "state": 0,  # NEW
+            }
+
+        return cards[:max_cards]
+
+    def _dedup(self, card: Dict, seen: set) -> bool:
+        """Deduplication by front text hash."""
+        h = hashlib.md5(card["front"][:60].encode()).hexdigest()[:10]
+        if h in seen:
+            return False
+        seen.add(h)
+        return True
+
+    def _concept_card(self, concept: Dict, chunks: List[Dict]) -> Optional[Dict]:
         """Create concept-definition flashcard."""
         name = concept.get("concept", "")
-        if not name:
+        if not name or len(name) < 3:
             return None
 
         # Find definition from chunk context
-        definition = ""
-        for chunk in chunks:
-            text = chunk.get("text", "")
-            if name.lower() in text.lower():
-                # Extract sentence containing concept
-                sentences = re.split(r'[.!?]+', text)
-                for sent in sentences:
-                    if name.lower() in sent.lower() and len(sent.strip()) > 20:
-                        definition = sent.strip()
-                        break
-                if definition:
-                    break
-
+        definition = self._extract_definition(name, chunks)
         if not definition:
             return None
 
         return {
             "front": f"What is {name}?",
-            "back": definition[:300],
+            "back": definition[:400],
             "card_type": "concept",
             "concept": name,
+            "tags": [],
+        }
+
+    def _reverse_card(self, concept_card: Dict) -> Optional[Dict]:
+        """Create reverse card: definition → concept name."""
+        back = concept_card.get("back", "")
+        concept = concept_card.get("concept", "")
+        if not back or not concept or len(back) < 20:
+            return None
+
+        # Mask concept name in definition
+        masked = re.sub(
+            re.escape(concept), "___", back,
+            flags=re.IGNORECASE, count=1
+        )
+        if "___" not in masked:
+            masked = back  # If concept not in definition, use as-is
+
+        return {
+            "front": f"What concept does this describe?\n\n{masked[:300]}",
+            "back": concept,
+            "card_type": "reverse",
+            "concept": concept,
             "tags": [],
         }
 
@@ -82,7 +144,7 @@ class FlashcardGenerator:
         """Create cloze deletion cards."""
         cards = []
         sentences = re.split(r'[.!?]+', text)
-        concept_names = [c["concept"] for c in concepts]
+        concept_names = [c["concept"] for c in concepts if len(c.get("concept", "")) > 3]
 
         for sent in sentences:
             sent = sent.strip()
@@ -97,7 +159,7 @@ class FlashcardGenerator:
                     )
                     if "[...]" in cloze:
                         cards.append({
-                            "front": cloze,
+                            "front": cloze[:300],
                             "back": concept,
                             "card_type": "cloze",
                             "concept": concept,
@@ -105,4 +167,104 @@ class FlashcardGenerator:
                         })
                         break  # One card per sentence
 
+        return cards[:8]
+
+    def _key_value_cards(self, text: str) -> List[Dict]:
+        """
+        Extract key-value style facts from text.
+        Patterns: "X is Y", "X: Y", "X — Y"
+        """
+        cards = []
+        patterns = [
+            # "Term is/are definition."
+            r'(?:^|(?<=\. ))([A-Z][^.]{3,40}?)\s+(?:is|are|refers to|means)\s+([^.]{15,200})\.',
+            # "Term: definition"
+            r'(?:^|(?<=\n))([A-Z][^:\n]{3,40}):\s+([^\n]{15,200})',
+            # Vietnamese: "Thuật ngữ là ..."
+            r'(?:^|(?<=\. ))([A-Z\u00C0-\u024F\u1E00-\u1EFF][^.]{3,40}?)\s+(?:là|được định nghĩa)\s+([^.]{15,200})\.',
+        ]
+
+        for pattern in patterns:
+            for match in re.finditer(pattern, text):
+                key = match.group(1).strip()
+                value = match.group(2).strip()
+                if len(key) > 3 and len(value) > 15:
+                    cards.append({
+                        "front": f"Define: {key}",
+                        "back": value[:300],
+                        "card_type": "key_value",
+                        "concept": key,
+                        "tags": [],
+                    })
+
         return cards[:5]
+
+    def _extract_definition(self, concept: str, chunks: List[Dict]) -> Optional[str]:
+        """Find best definition from chunks."""
+        best = None
+        best_score = 0
+
+        for chunk in chunks:
+            text = chunk.get("text", "")
+            if concept.lower() not in text.lower():
+                continue
+
+            sentences = re.split(r'[.!?]+', text)
+            for sent in sentences:
+                if concept.lower() in sent.lower() and len(sent.strip()) > 20:
+                    # Prefer definition-like sentences
+                    score = len(sent.strip())
+                    if any(kw in sent.lower() for kw in ['is', 'are', 'refers', 'defined', 'means', 'là']):
+                        score *= 2
+                    if score > best_score:
+                        best_score = score
+                        best = sent.strip()
+
+        return best
+
+    def _estimate_difficulty(self, card: Dict) -> float:
+        """Estimate card difficulty based on content complexity."""
+        text = card.get("back", "") + card.get("front", "")
+        words = text.split()
+        word_count = len(words)
+
+        # Longer answers = harder
+        length_factor = min(1.0, word_count / 50)
+
+        # Technical terms = harder (words with capitals, numbers, symbols)
+        technical_count = sum(1 for w in words if any(c.isupper() for c in w[1:]) or any(c.isdigit() for c in w))
+        tech_factor = min(1.0, technical_count / max(word_count, 1) * 5)
+
+        # Card type factor
+        type_difficulty = {
+            "concept": 0.4,
+            "cloze": 0.3,
+            "reverse": 0.6,
+            "key_value": 0.5,
+        }
+        type_factor = type_difficulty.get(card.get("card_type", "concept"), 0.5)
+
+        difficulty = 0.3 * length_factor + 0.3 * tech_factor + 0.4 * type_factor
+        return round(min(1.0, max(0.1, difficulty)), 2)
+
+    def _enhance_with_llm(self, cards: List[Dict]) -> List[Dict]:
+        """Use LLM to generate better definitions."""
+        if not self.llm:
+            return cards
+
+        for card in cards[:5]:
+            if card["card_type"] == "concept" and len(card["back"]) < 100:
+                prompt = f"""Give a clear, concise definition for educational flashcard.
+Concept: {card['concept']}
+Current definition: {card['back']}
+
+Return ONLY the improved definition (1-3 sentences)."""
+                try:
+                    improved = self.llm.generate(prompt, temperature=0.3, max_tokens=150)
+                    if improved and not improved.startswith("[ERROR]") and len(improved) > 15:
+                        card["back"] = improved.strip()
+                        card["llm_enhanced"] = True
+                except Exception:
+                    pass
+
+        return cards

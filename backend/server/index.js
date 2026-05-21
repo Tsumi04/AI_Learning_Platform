@@ -12,6 +12,8 @@ import errorHandler from './middleware/errorHandler.js';
 import authRoutes from './routes/auth.routes.js';
 import documentRoutes from './routes/document.routes.js';
 import aiRoutes from './routes/ai.routes.js';
+import learningRoutes from './routes/learning.routes.js';
+import annotationRoutes from './routes/annotation.routes.js';
 
 const app = express();
 
@@ -135,7 +137,7 @@ app.get('/api/health', async (req, res) => {
     aiCoreStatus.status === 'online' &&
     ollamaStatus.status === 'online';
 
-  const statusCode = dbStatus.connected ? 200 : 503;
+  const statusCode = 200; // Always return 200 to allow frontend to parse the degraded status without network errors
 
   res.status(statusCode).json({
     status: allHealthy ? 'healthy' : 'degraded',
@@ -165,6 +167,8 @@ app.get('/api/health', async (req, res) => {
 app.use('/api/auth', authRoutes);
 app.use('/api/documents', documentRoutes);
 app.use('/api/ai', aiRoutes);
+app.use('/api/learning', learningRoutes);
+app.use('/api/annotations', annotationRoutes);
 
 // ──────────────────────────────────────────────
 // 404 Handler
@@ -197,14 +201,20 @@ const startServer = async () => {
   const dbConn = await connectDB();
 
   // Khởi động Express server BẤT KỂ MongoDB status
-  const server = app.listen(config.port, () => {
-    const dbIcon = dbConn ? '✅' : '⚠️';
-    const dbText = dbConn ? 'Connected' : 'Disconnected (server vẫn chạy)';
+  let currentPort = config.port;
 
-    console.log(`
+  const startListening = (port) => {
+    const server_instance = app.listen(port);
+
+    server_instance.on('listening', () => {
+      currentPort = port;
+      const dbIcon = dbConn ? '✅' : '⚠️';
+      const dbText = dbConn ? 'Connected' : 'Disconnected (server vẫn chạy)';
+
+      console.log(`
 ╔═══════════════════════════════════════════════════╗
 ║          NEUROVAULT API Gateway v2.1              ║
-║          Port: ${String(config.port).padEnd(36)}║
+║          Port: ${String(port).padEnd(36)}║
 ║          Env:  ${config.nodeEnv.padEnd(36)}║
 ║          DB:   ${dbIcon} ${dbText.padEnd(33)}║
 ║                                                   ║
@@ -214,8 +224,29 @@ const startServer = async () => {
 ║    /api/documents   — Document CRUD + Upload       ║
 ║    /api/ai          — Chat, Quiz, Flashcards       ║
 ╚═══════════════════════════════════════════════════╝
-    `);
-  });
+      `);
+    });
+
+    server_instance.on('error', (err) => {
+      if (err.code === 'EADDRINUSE') {
+        console.warn(`[Server] ⚠️ Port ${port} đang bị chiếm. Thử port ${port + 1}...`);
+        server_instance.close();
+        if (port < config.port + 5) {
+          startListening(port + 1);
+        } else {
+          console.error(`[Server] ❌ Không tìm được port trống (${config.port}-${port}). Thoát.`);
+          process.exit(1);
+        }
+      } else {
+        console.error('[Server] ❌ Server error:', err.message);
+        process.exit(1);
+      }
+    });
+
+    return server_instance;
+  };
+
+  const server = startListening(config.port);
 
   // ── Graceful Shutdown ──
   const gracefulShutdown = async (signal) => {

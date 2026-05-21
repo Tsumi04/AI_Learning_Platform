@@ -1,321 +1,322 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
-import { Network, Loader2, RotateCcw, ZoomIn, ZoomOut, Maximize2 } from 'lucide-react';
+import {
+  Network, Loader2, RotateCcw, ZoomIn, ZoomOut, Maximize2,
+  Search, Filter, Info, X, ChevronDown,
+} from 'lucide-react';
 import { aiAPI } from '../../services/api';
+import ForceEngine from './ForceEngine';
+import GraphRenderer, { getMasteryColor, NODE_PALETTE } from './GraphRenderer';
 
 /**
- * KnowledgeGraphView — Force-Directed Graph Visualization
- * 100% tự build, không dùng D3.js
- * Canvas-based rendering with physics simulation
+ * KnowledgeGraphView v2 — Force-Directed Interactive Visualizer
+ * - Barnes-Hut physics (O(n log n))
+ * - High-DPI Canvas rendering
+ * - Mastery color-coding (red→green)
+ * - Particle animations on edges
+ * - Minimap, search, filter, neighbor highlighting
+ * - Edge arrows + relation labels
  */
 export default function KnowledgeGraphView({ documentId }) {
   const canvasRef = useRef(null);
+  const minimapRef = useRef(null);
+  const containerRef = useRef(null);
+  const engineRef = useRef(null);
+  const rendererRef = useRef(null);
+  const animRef = useRef(null);
+
   const [graphData, setGraphData] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
   const [started, setStarted] = useState(false);
-  const [selectedNode, setSelectedNode] = useState(null);
+  const [selectedNode, setSelectedNode] = useState(-1);
   const [zoom, setZoom] = useState(1);
-  const nodesRef = useRef([]);
-  const edgesRef = useRef([]);
-  const animFrameRef = useRef(null);
-  const dragRef = useRef({ isDragging: false, nodeIndex: -1, offsetX: 0, offsetY: 0 });
-  const panRef = useRef({ x: 0, y: 0, isPanning: false, startX: 0, startY: 0 });
+  const [searchQuery, setSearchQuery] = useState('');
+  const [showSearch, setShowSearch] = useState(false);
+  const [filterMode, setFilterMode] = useState('all'); // all, high-centrality, low-mastery
 
+  const panRef = useRef({ x: 0, y: 0 });
+  const dragRef = useRef({ active: false, nodeIdx: -1, ox: 0, oy: 0 });
+  const panDragRef = useRef({ active: false, sx: 0, sy: 0 });
+  const zoomRef = useRef(1);
+
+  // ── Load graph data ──
   const loadGraph = async () => {
     try {
       setIsLoading(true); setError(''); setStarted(true);
       const data = await aiAPI.getKnowledgeGraph(documentId);
       if (data.graph && data.graph.nodes?.length > 0) {
         setGraphData(data.graph);
-        initializeNodes(data.graph);
       } else {
-        setError('No concepts found. Process the document first.');
+        setError('Không tìm thấy concepts. Hãy xử lý tài liệu trước.');
       }
     } catch (err) {
-      setError(err.message || 'Failed to build knowledge graph. Ensure AI server is running.');
+      setError(err.message || 'Lỗi khi xây dựng knowledge graph. Kiểm tra AI server.');
     } finally {
       setIsLoading(false);
     }
   };
 
-  const initializeNodes = (graph) => {
+  // ── Initialize engine + renderer when data arrives ──
+  useEffect(() => {
+    if (!graphData || !canvasRef.current) return;
+
     const canvas = canvasRef.current;
-    if (!canvas) return;
-    const W = canvas.width, H = canvas.height;
-    const cx = W / 2, cy = H / 2;
+    const parent = containerRef.current;
+    if (!parent) return;
 
-    // Position nodes in a circle initially
-    const nodes = graph.nodes.map((n, i) => {
-      const angle = (2 * Math.PI * i) / graph.nodes.length;
-      const r = Math.min(W, H) * 0.3;
-      return {
-        ...n,
-        x: cx + r * Math.cos(angle) + (Math.random() - 0.5) * 40,
-        y: cy + r * Math.sin(angle) + (Math.random() - 0.5) * 40,
-        vx: 0, vy: 0,
-        radius: Math.max(18, Math.min(35, 12 + (n.centrality_score || 0) * 60)),
-      };
-    });
+    const engine = new ForceEngine();
+    const renderer = new GraphRenderer(canvas);
+    engineRef.current = engine;
+    rendererRef.current = renderer;
 
-    const edges = (graph.edges || []).map(e => ({
-      ...e,
-      sourceIdx: nodes.findIndex(n => n.concept === e.source),
-      targetIdx: nodes.findIndex(n => n.concept === e.target),
-    })).filter(e => e.sourceIdx >= 0 && e.targetIdx >= 0);
+    const w = parent.clientWidth;
+    const h = parent.clientHeight;
+    engine.setSize(w, h);
+    renderer.resize(w, h);
+    engine.setGraph(graphData.nodes || [], graphData.edges || []);
 
-    nodesRef.current = nodes;
-    edgesRef.current = edges;
-    startSimulation();
-  };
+    // Reset view
+    panRef.current = { x: 0, y: 0 };
+    zoomRef.current = 1;
+    setZoom(1);
+    setSelectedNode(-1);
 
-  // Force-directed layout simulation
-  const startSimulation = () => {
-    let iteration = 0;
-    const maxIterations = 300;
+    startAnimation();
 
-    const simulate = () => {
-      const nodes = nodesRef.current;
-      const edges = edgesRef.current;
-      if (!nodes.length) return;
+    return () => { if (animRef.current) cancelAnimationFrame(animRef.current); };
+  }, [graphData]);
 
-      const canvas = canvasRef.current;
-      if (!canvas) return;
-      const W = canvas.width, H = canvas.height;
+  // ── Animation loop ──
+  const startAnimation = useCallback(() => {
+    const animate = () => {
+      const engine = engineRef.current;
+      const renderer = rendererRef.current;
+      if (!engine || !renderer) return;
 
-      // Damping factor (reduces over time for stability)
-      const damping = Math.max(0.1, 1 - iteration / maxIterations);
-      const repulsion = 8000 * damping;
-      const attraction = 0.005;
-      const centerPull = 0.01;
+      const pinnedIdx = dragRef.current.active ? dragRef.current.nodeIdx : -1;
+      engine.tick(pinnedIdx);
 
-      // Repulsive forces between all node pairs
-      for (let i = 0; i < nodes.length; i++) {
-        for (let j = i + 1; j < nodes.length; j++) {
-          const dx = nodes[j].x - nodes[i].x;
-          const dy = nodes[j].y - nodes[i].y;
-          const dist = Math.max(1, Math.sqrt(dx * dx + dy * dy));
-          const force = repulsion / (dist * dist);
-          const fx = (dx / dist) * force;
-          const fy = (dy / dist) * force;
-          nodes[i].vx -= fx; nodes[i].vy -= fy;
-          nodes[j].vx += fx; nodes[j].vy += fy;
+      // Mark neighbors of selected node
+      if (selectedNode >= 0) {
+        const edges = engine.edges;
+        const neighborSet = new Set();
+        for (const e of edges) {
+          if (e.sourceIdx === selectedNode) neighborSet.add(e.targetIdx);
+          if (e.targetIdx === selectedNode) neighborSet.add(e.sourceIdx);
         }
+        engine.nodes.forEach((n, i) => { n._isNeighbor = neighborSet.has(i); });
+      } else {
+        engine.nodes.forEach(n => { n._isNeighbor = false; });
       }
 
-      // Attractive forces along edges
-      for (const edge of edges) {
-        const a = nodes[edge.sourceIdx], b = nodes[edge.targetIdx];
-        if (!a || !b) continue;
-        const dx = b.x - a.x, dy = b.y - a.y;
-        const dist = Math.max(1, Math.sqrt(dx * dx + dy * dy));
-        const idealDist = 120;
-        const force = (dist - idealDist) * attraction;
-        const fx = (dx / dist) * force;
-        const fy = (dy / dist) * force;
-        a.vx += fx; a.vy += fy;
-        b.vx -= fx; b.vy -= fy;
-      }
+      renderer.selectedNode = selectedNode;
+      renderer.render(engine.nodes, engine.edges, zoomRef.current, panRef.current.x, panRef.current.y);
 
-      // Center gravity
-      for (const node of nodes) {
-        node.vx += (W / 2 - node.x) * centerPull;
-        node.vy += (H / 2 - node.y) * centerPull;
-      }
+      // Draw minimap
+      drawMinimap();
 
-      // Apply velocity
-      for (const node of nodes) {
-        node.vx *= 0.85; node.vy *= 0.85;
-        if (dragRef.current.isDragging && nodes.indexOf(node) === dragRef.current.nodeIndex) continue;
-        node.x += node.vx;
-        node.y += node.vy;
-        node.x = Math.max(40, Math.min(W - 40, node.x));
-        node.y = Math.max(40, Math.min(H - 40, node.y));
-      }
-
-      render();
-      iteration++;
-      if (iteration < maxIterations) {
-        animFrameRef.current = requestAnimationFrame(simulate);
-      }
+      animRef.current = requestAnimationFrame(animate);
     };
+    if (animRef.current) cancelAnimationFrame(animRef.current);
+    animate();
+  }, [selectedNode]);
 
-    if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
-    simulate();
-  };
+  // Re-start animation when selectedNode changes
+  useEffect(() => {
+    if (engineRef.current && rendererRef.current) startAnimation();
+  }, [selectedNode, startAnimation]);
 
-  // Colors palette for nodes
-  const nodeColors = [
-    '#6366f1', '#8b5cf6', '#a78bfa', '#10b981', '#14b8a6',
-    '#f59e0b', '#ef4444', '#ec4899', '#3b82f6', '#06b6d4',
-  ];
+  // ── Minimap ──
+  const drawMinimap = () => {
+    const miniCanvas = minimapRef.current;
+    const engine = engineRef.current;
+    if (!miniCanvas || !engine || !engine.nodes.length) return;
 
-  const render = useCallback(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const ctx = canvas.getContext('2d');
-    const W = canvas.width, H = canvas.height;
-    const nodes = nodesRef.current;
-    const edges = edgesRef.current;
+    const ctx = miniCanvas.getContext('2d');
+    const mw = 140, mh = 100;
+    miniCanvas.width = mw; miniCanvas.height = mh;
 
-    ctx.clearRect(0, 0, W, H);
-    ctx.save();
-    ctx.translate(panRef.current.x, panRef.current.y);
-    ctx.scale(zoom, zoom);
+    ctx.fillStyle = 'rgba(13,13,20,0.85)';
+    ctx.fillRect(0, 0, mw, mh);
 
-    // Draw edges
-    for (const edge of edges) {
-      const a = nodes[edge.sourceIdx], b = nodes[edge.targetIdx];
+    const nodes = engine.nodes;
+    const scaleX = mw / engine.width;
+    const scaleY = mh / engine.height;
+    const scale = Math.min(scaleX, scaleY) * 0.9;
+    const ox = (mw - engine.width * scale) / 2;
+    const oy = (mh - engine.height * scale) / 2;
+
+    // Edges
+    ctx.strokeStyle = 'rgba(129,140,248,0.15)';
+    ctx.lineWidth = 0.5;
+    for (const e of engine.edges) {
+      const a = nodes[e.sourceIdx], b = nodes[e.targetIdx];
       if (!a || !b) continue;
       ctx.beginPath();
-      ctx.moveTo(a.x, a.y);
-      ctx.lineTo(b.x, b.y);
-      ctx.strokeStyle = `rgba(99, 102, 241, ${0.1 + (edge.weight || 0.5) * 0.2})`;
-      ctx.lineWidth = 1 + (edge.weight || 0.5);
+      ctx.moveTo(ox + a.x * scale, oy + a.y * scale);
+      ctx.lineTo(ox + b.x * scale, oy + b.y * scale);
       ctx.stroke();
     }
 
-    // Draw nodes
-    for (let i = 0; i < nodes.length; i++) {
-      const node = nodes[i];
-      const color = nodeColors[i % nodeColors.length];
-      const isSelected = selectedNode === i;
-
-      // Glow
-      if (isSelected) {
-        ctx.beginPath();
-        ctx.arc(node.x, node.y, node.radius + 8, 0, Math.PI * 2);
-        ctx.fillStyle = `${color}22`;
-        ctx.fill();
-      }
-
-      // Node circle
+    // Nodes
+    const hasMastery = nodes.some(n => n.mastery != null);
+    nodes.forEach((n, i) => {
       ctx.beginPath();
-      ctx.arc(node.x, node.y, node.radius, 0, Math.PI * 2);
-      const gradient = ctx.createRadialGradient(node.x - node.radius * 0.3, node.y - node.radius * 0.3, 0, node.x, node.y, node.radius);
-      gradient.addColorStop(0, color);
-      gradient.addColorStop(1, `${color}cc`);
-      ctx.fillStyle = gradient;
+      ctx.arc(ox + n.x * scale, oy + n.y * scale, 2, 0, Math.PI * 2);
+      ctx.fillStyle = hasMastery ? getMasteryColor(n.mastery || 0) : NODE_PALETTE[i % NODE_PALETTE.length];
       ctx.fill();
+    });
 
-      // Border
-      ctx.strokeStyle = isSelected ? '#fff' : `${color}66`;
-      ctx.lineWidth = isSelected ? 3 : 1;
-      ctx.stroke();
+    // Viewport rect
+    const vx = (-panRef.current.x / zoomRef.current) * scale + ox;
+    const vy = (-panRef.current.y / zoomRef.current) * scale + oy;
+    const vw = (engine.width / zoomRef.current) * scale;
+    const vh = (engine.height / zoomRef.current) * scale;
+    ctx.strokeStyle = 'rgba(129,140,248,0.5)';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(vx, vy, vw, vh);
+  };
 
-      // Shadow
-      ctx.shadowColor = color;
-      ctx.shadowBlur = isSelected ? 16 : 6;
-      ctx.shadowOffsetX = 0;
-      ctx.shadowOffsetY = 2;
-
-      // Label
-      ctx.shadowBlur = 0;
-      const label = node.concept.length > 12 ? node.concept.slice(0, 11) + '…' : node.concept;
-      ctx.font = `${isSelected ? '600' : '500'} ${Math.max(9, node.radius * 0.55)}px Inter, sans-serif`;
-      ctx.fillStyle = '#ffffff';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillText(label, node.x, node.y);
-    }
-
-    ctx.restore();
-  }, [zoom, selectedNode]);
-
-  // Mouse interaction handlers
-  const getMousePos = (e) => {
+  // ── Mouse position helper ──
+  const getWorldPos = (e) => {
     const rect = canvasRef.current.getBoundingClientRect();
     return {
-      x: (e.clientX - rect.left - panRef.current.x) / zoom,
-      y: (e.clientY - rect.top - panRef.current.y) / zoom,
+      x: (e.clientX - rect.left - panRef.current.x) / zoomRef.current,
+      y: (e.clientY - rect.top - panRef.current.y) / zoomRef.current,
     };
   };
 
-  const findNodeAt = (mx, my) => {
-    const nodes = nodesRef.current;
-    for (let i = nodes.length - 1; i >= 0; i--) {
-      const dx = mx - nodes[i].x, dy = my - nodes[i].y;
-      if (dx * dx + dy * dy < nodes[i].radius * nodes[i].radius) return i;
-    }
-    return -1;
-  };
-
+  // ── Mouse handlers ──
   const handleMouseDown = (e) => {
-    const { x, y } = getMousePos(e);
-    const idx = findNodeAt(x, y);
+    const pos = getWorldPos(e);
+    const renderer = rendererRef.current;
+    const engine = engineRef.current;
+    if (!renderer || !engine) return;
+
+    const idx = renderer.findNodeAt(engine.nodes, pos.x, pos.y);
     if (idx >= 0) {
-      dragRef.current = { isDragging: true, nodeIndex: idx, offsetX: x - nodesRef.current[idx].x, offsetY: y - nodesRef.current[idx].y };
+      dragRef.current = { active: true, nodeIdx: idx, ox: pos.x - engine.nodes[idx].x, oy: pos.y - engine.nodes[idx].y };
       setSelectedNode(idx);
     } else {
-      panRef.current.isPanning = true;
-      panRef.current.startX = e.clientX - panRef.current.x;
-      panRef.current.startY = e.clientY - panRef.current.y;
-      setSelectedNode(null);
+      panDragRef.current = { active: true, sx: e.clientX - panRef.current.x, sy: e.clientY - panRef.current.y };
+      setSelectedNode(-1);
     }
   };
 
   const handleMouseMove = (e) => {
-    if (dragRef.current.isDragging) {
-      const { x, y } = getMousePos(e);
-      const node = nodesRef.current[dragRef.current.nodeIndex];
+    const engine = engineRef.current;
+    const renderer = rendererRef.current;
+    if (!engine || !renderer) return;
+
+    if (dragRef.current.active) {
+      const pos = getWorldPos(e);
+      const node = engine.nodes[dragRef.current.nodeIdx];
       if (node) {
-        node.x = x - dragRef.current.offsetX;
-        node.y = y - dragRef.current.offsetY;
+        node.x = pos.x - dragRef.current.ox;
+        node.y = pos.y - dragRef.current.oy;
         node.vx = 0; node.vy = 0;
-        render();
+        engine.reheat(0.05);
       }
-    } else if (panRef.current.isPanning) {
-      panRef.current.x = e.clientX - panRef.current.startX;
-      panRef.current.y = e.clientY - panRef.current.startY;
-      render();
+    } else if (panDragRef.current.active) {
+      panRef.current.x = e.clientX - panDragRef.current.sx;
+      panRef.current.y = e.clientY - panDragRef.current.sy;
+    } else {
+      // Hover detection
+      const pos = getWorldPos(e);
+      const idx = renderer.findNodeAt(engine.nodes, pos.x, pos.y);
+      renderer.hoveredNode = idx;
+      canvasRef.current.style.cursor = idx >= 0 ? 'pointer' : 'grab';
     }
   };
 
   const handleMouseUp = () => {
-    dragRef.current.isDragging = false;
-    panRef.current.isPanning = false;
+    if (dragRef.current.active) engineRef.current?.reheat(0.15);
+    dragRef.current.active = false;
+    panDragRef.current.active = false;
   };
 
   const handleWheel = (e) => {
     e.preventDefault();
     const delta = e.deltaY > 0 ? 0.9 : 1.1;
-    setZoom(prev => Math.max(0.3, Math.min(3, prev * delta)));
+    const newZoom = Math.max(0.2, Math.min(4, zoomRef.current * delta));
+    zoomRef.current = newZoom;
+    setZoom(newZoom);
   };
 
-  useEffect(() => { render(); }, [zoom, selectedNode, render]);
-
+  // ── Resize ──
   useEffect(() => {
-    return () => { if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current); };
-  }, []);
+    const parent = containerRef.current;
+    if (!parent) return;
 
-  // Resize canvas
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const parent = canvas.parentElement;
     const resize = () => {
-      canvas.width = parent.clientWidth;
-      canvas.height = parent.clientHeight;
-      render();
+      const w = parent.clientWidth;
+      const h = parent.clientHeight;
+      rendererRef.current?.resize(w, h);
+      if (engineRef.current) engineRef.current.setSize(w, h);
     };
-    resize();
-    window.addEventListener('resize', resize);
-    return () => window.removeEventListener('resize', resize);
-  }, [render]);
+
+    const observer = new ResizeObserver(resize);
+    observer.observe(parent);
+    return () => observer.disconnect();
+  }, [graphData]);
+
+  // ── Keyboard: Ctrl+F search ──
+  useEffect(() => {
+    const handleKey = (e) => {
+      if (e.ctrlKey && e.key === 'f' && started && graphData) {
+        e.preventDefault();
+        setShowSearch(s => !s);
+      }
+      if (e.key === 'Escape') { setShowSearch(false); setSearchQuery(''); }
+    };
+    window.addEventListener('keydown', handleKey);
+    return () => window.removeEventListener('keydown', handleKey);
+  }, [started, graphData]);
+
+  // ── Search: highlight matching node ──
+  useEffect(() => {
+    if (!searchQuery.trim() || !engineRef.current) return;
+    const q = searchQuery.toLowerCase();
+    const idx = engineRef.current.nodes.findIndex(n => n.concept.toLowerCase().includes(q));
+    if (idx >= 0) {
+      setSelectedNode(idx);
+      // Pan to node
+      const node = engineRef.current.nodes[idx];
+      const parent = containerRef.current;
+      if (node && parent) {
+        panRef.current.x = parent.clientWidth / 2 - node.x * zoomRef.current;
+        panRef.current.y = parent.clientHeight / 2 - node.y * zoomRef.current;
+      }
+    }
+  }, [searchQuery]);
+
+  // ── Zoom controls ──
+  const zoomIn = () => { zoomRef.current = Math.min(4, zoomRef.current * 1.3); setZoom(zoomRef.current); };
+  const zoomOut = () => { zoomRef.current = Math.max(0.2, zoomRef.current * 0.7); setZoom(zoomRef.current); };
+  const resetView = () => { zoomRef.current = 1; panRef.current = { x: 0, y: 0 }; setZoom(1); setSelectedNode(-1); };
+
+  // ── Selected node data ──
+  const selectedNodeData = selectedNode >= 0 ? engineRef.current?.nodes[selectedNode] : null;
+  const selectedEdges = selectedNode >= 0
+    ? (engineRef.current?.edges || []).filter(e => e.sourceIdx === selectedNode || e.targetIdx === selectedNode)
+    : [];
+
+  // ═══ RENDER ═══
 
   if (!started) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 'var(--space-xl)', padding: 'var(--space-xl)' }}>
-        <div style={{ width: 72, height: 72, borderRadius: 'var(--radius-xl)', background: 'rgba(245,158,11,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <Network size={32} style={{ color: '#f59e0b' }} strokeWidth={1.5} />
+        <div style={{ width: 80, height: 80, borderRadius: 'var(--radius-xl)', background: 'rgba(245,158,11,0.08)', display: 'flex', alignItems: 'center', justifyContent: 'center', animation: 'float 6s ease-in-out infinite' }}>
+          <Network size={36} style={{ color: '#f59e0b' }} strokeWidth={1.5} />
         </div>
         <div style={{ textAlign: 'center' }}>
-          <h3 style={{ fontSize: '1.25rem', fontWeight: 600, color: 'var(--c-text-primary)', marginBottom: 8 }}>Knowledge Graph</h3>
-          <p style={{ fontSize: '0.9375rem', color: 'var(--c-text-secondary)', maxWidth: 400 }}>
-            Visualize concept relationships extracted from your document. Drag nodes, zoom, and explore how ideas connect.
+          <h3 style={{ fontSize: '1.25rem', fontWeight: 700, color: 'var(--c-text-primary)', marginBottom: 8, letterSpacing: '-0.02em' }}>Knowledge Graph</h3>
+          <p style={{ fontSize: '0.9375rem', color: 'var(--c-text-secondary)', maxWidth: 420, lineHeight: 1.6 }}>
+            Trực quan hóa quan hệ giữa các khái niệm trong tài liệu. Kéo thả, phóng to, và khám phá cách các ý tưởng kết nối với nhau.
           </p>
         </div>
         <button className="btn btn-primary btn-lg" onClick={loadGraph}>
-          <Network size={18} /> Build Knowledge Graph
+          <Network size={18} /> Xây dựng Knowledge Graph
         </button>
       </div>
     );
@@ -325,7 +326,7 @@ export default function KnowledgeGraphView({ documentId }) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 'var(--space-lg)' }}>
         <Loader2 size={32} style={{ color: 'var(--c-accent)', animation: 'rotate-slow 1s linear infinite' }} />
-        <div style={{ fontSize: '0.9375rem', color: 'var(--c-text-secondary)' }}>Building knowledge graph...</div>
+        <div style={{ fontSize: '0.9375rem', color: 'var(--c-text-secondary)' }}>Đang xây dựng knowledge graph...</div>
       </div>
     );
   }
@@ -334,81 +335,208 @@ export default function KnowledgeGraphView({ documentId }) {
     return (
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 'var(--space-lg)' }}>
         <div style={{ color: 'var(--c-error)', fontSize: '0.9375rem' }}>{error}</div>
-        <button className="btn btn-ghost" onClick={() => { setStarted(false); setError(''); }}><RotateCcw size={16} /> Try Again</button>
+        <button className="btn btn-ghost" onClick={() => { setStarted(false); setError(''); }}>
+          <RotateCcw size={16} /> Thử lại
+        </button>
       </div>
     );
   }
 
-  const selectedNodeData = selectedNode !== null ? nodesRef.current[selectedNode] : null;
-
   return (
-    <div style={{ display: 'flex', height: '100%', position: 'relative' }}>
-      {/* Canvas */}
-      <div style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
-        <canvas ref={canvasRef} style={{ display: 'block', cursor: dragRef.current.isDragging ? 'grabbing' : 'grab' }}
-          onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onMouseLeave={handleMouseUp} onWheel={handleWheel} />
+    <div style={{ display: 'flex', height: '100%', position: 'relative', borderRadius: 'var(--radius-lg)', overflow: 'hidden', border: '1px solid var(--c-border)', background: 'var(--c-bg-primary)' }}>
+      {/* ── Canvas Container ── */}
+      <div ref={containerRef} style={{ flex: 1, position: 'relative', overflow: 'hidden' }}>
+        <canvas
+          ref={canvasRef}
+          style={{ display: 'block', cursor: dragRef.current.active ? 'grabbing' : 'grab' }}
+          onMouseDown={handleMouseDown}
+          onMouseMove={handleMouseMove}
+          onMouseUp={handleMouseUp}
+          onMouseLeave={handleMouseUp}
+          onWheel={handleWheel}
+        />
 
-        {/* Zoom Controls */}
-        <div style={{ position: 'absolute', bottom: 16, right: 16, display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <button onClick={() => setZoom(z => Math.min(3, z * 1.2))} style={{ width: 36, height: 36, borderRadius: 'var(--radius-md)', background: 'white', border: '1px solid var(--c-border)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: 'var(--shadow-md)' }}>
-            <ZoomIn size={16} />
-          </button>
-          <button onClick={() => setZoom(z => Math.max(0.3, z * 0.8))} style={{ width: 36, height: 36, borderRadius: 'var(--radius-md)', background: 'white', border: '1px solid var(--c-border)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: 'var(--shadow-md)' }}>
-            <ZoomOut size={16} />
-          </button>
-          <button onClick={() => { setZoom(1); panRef.current.x = 0; panRef.current.y = 0; render(); }} style={{ width: 36, height: 36, borderRadius: 'var(--radius-md)', background: 'white', border: '1px solid var(--c-border)', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', boxShadow: 'var(--shadow-md)' }}>
-            <Maximize2 size={16} />
-          </button>
+        {/* ── Stats Overlay (top-left) ── */}
+        <div style={{
+          position: 'absolute', top: 12, left: 12,
+          background: 'var(--c-bg-glass-strong)', borderRadius: 'var(--radius-md)',
+          padding: '0.4rem 0.75rem', fontSize: '0.6875rem', color: 'var(--c-text-secondary)',
+          border: '1px solid var(--c-border)', backdropFilter: 'blur(12px)',
+          display: 'flex', alignItems: 'center', gap: 12,
+        }}>
+          <span><strong style={{ color: 'var(--c-text-primary)' }}>{graphData?.stats?.total_concepts || engineRef.current?.nodes.length || 0}</strong> concepts</span>
+          <span style={{ color: 'var(--c-border)' }}>·</span>
+          <span><strong style={{ color: 'var(--c-text-primary)' }}>{graphData?.stats?.total_edges || engineRef.current?.edges.length || 0}</strong> connections</span>
+          <span style={{ color: 'var(--c-border)' }}>·</span>
+          <span>{Math.round(zoomRef.current * 100)}%</span>
         </div>
 
-        {/* Stats overlay */}
-        <div style={{ position: 'absolute', top: 16, left: 16, background: 'rgba(255,255,255,0.9)', borderRadius: 'var(--radius-md)', padding: '0.5rem 0.75rem', fontSize: '0.6875rem', color: 'var(--c-text-secondary)', border: '1px solid var(--c-border)', backdropFilter: 'blur(8px)', boxShadow: 'var(--shadow-sm)' }}>
-          <strong>{graphData?.stats?.total_concepts || 0}</strong> concepts · <strong>{graphData?.stats?.total_edges || 0}</strong> connections
+        {/* ── Search Bar (top-center) ── */}
+        {showSearch && (
+          <div className="animate-fade-in" style={{
+            position: 'absolute', top: 12, left: '50%', transform: 'translateX(-50%)',
+            display: 'flex', alignItems: 'center', gap: 6,
+            background: 'var(--c-bg-glass-strong)', borderRadius: 'var(--radius-full)',
+            padding: '0.375rem 0.75rem', border: '1px solid var(--c-border-active)',
+            backdropFilter: 'blur(12px)', minWidth: 240,
+          }}>
+            <Search size={13} style={{ color: 'var(--c-accent)', flexShrink: 0 }} />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              placeholder="Tìm khái niệm..."
+              autoFocus
+              style={{
+                background: 'transparent', border: 'none', outline: 'none',
+                fontSize: '0.8125rem', color: 'var(--c-text-primary)', width: '100%',
+                fontFamily: 'var(--font-sans)',
+              }}
+            />
+            <button onClick={() => { setShowSearch(false); setSearchQuery(''); }} style={{
+              background: 'transparent', border: 'none', cursor: 'pointer',
+              color: 'var(--c-text-tertiary)', display: 'flex', padding: 2,
+            }}>
+              <X size={13} />
+            </button>
+          </div>
+        )}
+
+        {/* ── Controls (bottom-right) ── */}
+        <div style={{ position: 'absolute', bottom: 12, right: 12, display: 'flex', flexDirection: 'column', gap: 4 }}>
+          {[
+            { icon: ZoomIn, action: zoomIn, title: 'Phóng to' },
+            { icon: ZoomOut, action: zoomOut, title: 'Thu nhỏ' },
+            { icon: Maximize2, action: resetView, title: 'Reset view' },
+            { icon: Search, action: () => setShowSearch(s => !s), title: 'Tìm kiếm (Ctrl+F)' },
+          ].map(({ icon: Icon, action, title }, i) => (
+            <button key={i} onClick={action} title={title} style={{
+              width: 34, height: 34, borderRadius: 'var(--radius-md)',
+              background: 'var(--c-bg-glass-strong)', border: '1px solid var(--c-border)',
+              cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center',
+              backdropFilter: 'blur(8px)', color: 'var(--c-text-secondary)',
+              transition: 'all var(--duration-fast)',
+            }}
+              onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--c-border-hover)'; e.currentTarget.style.color = 'var(--c-text-primary)'; }}
+              onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--c-border)'; e.currentTarget.style.color = 'var(--c-text-secondary)'; }}
+            >
+              <Icon size={15} />
+            </button>
+          ))}
         </div>
+
+        {/* ── Minimap (bottom-left) ── */}
+        <div style={{
+          position: 'absolute', bottom: 12, left: 12,
+          borderRadius: 'var(--radius-md)', overflow: 'hidden',
+          border: '1px solid var(--c-border)', boxShadow: 'var(--shadow-md)',
+        }}>
+          <canvas ref={minimapRef} width={140} height={100} style={{ display: 'block' }} />
+        </div>
+
+        {/* ── Legend (top-right) ── */}
+        {engineRef.current?.nodes.some(n => n.mastery != null) && (
+          <div style={{
+            position: 'absolute', top: 12, right: 12,
+            background: 'var(--c-bg-glass-strong)', borderRadius: 'var(--radius-md)',
+            padding: '0.5rem 0.75rem', border: '1px solid var(--c-border)',
+            backdropFilter: 'blur(12px)', fontSize: '0.625rem',
+          }}>
+            <div style={{ fontWeight: 600, color: 'var(--c-text-secondary)', marginBottom: 6, textTransform: 'uppercase', letterSpacing: '0.04em' }}>Mastery</div>
+            {[
+              { label: 'Chưa học', color: getMasteryColor(0) },
+              { label: 'Mới bắt đầu', color: getMasteryColor(0.25) },
+              { label: 'Đang học', color: getMasteryColor(0.5) },
+              { label: 'Thành thạo', color: getMasteryColor(1.0) },
+            ].map(({ label, color }) => (
+              <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 3 }}>
+                <div style={{ width: 8, height: 8, borderRadius: '50%', background: color }} />
+                <span style={{ color: 'var(--c-text-tertiary)' }}>{label}</span>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
-      {/* Side Panel — Selected Node Info */}
+      {/* ── Side Panel (selected node) ── */}
       {selectedNodeData && (
-        <div className="animate-slide-in-right" style={{ width: 260, borderLeft: '1px solid var(--c-border)', padding: 'var(--space-lg)', overflowY: 'auto', background: 'white' }}>
-          <div style={{ fontSize: '0.6875rem', fontWeight: 600, color: 'var(--c-text-tertiary)', textTransform: 'uppercase', marginBottom: 'var(--space-sm)' }}>Selected Concept</div>
-          <div style={{ fontSize: '1rem', fontWeight: 700, color: 'var(--c-text-primary)', marginBottom: 'var(--space-md)' }}>{selectedNodeData.concept}</div>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem' }}>
-              <span style={{ color: 'var(--c-text-tertiary)' }}>Centrality</span>
-              <span style={{ color: 'var(--c-text-primary)', fontWeight: 600 }}>{((selectedNodeData.centrality_score || 0) * 100).toFixed(1)}%</span>
+        <div className="animate-slide-in-right" style={{
+          width: 260, borderLeft: '1px solid var(--c-border)',
+          padding: 'var(--space-lg)', overflowY: 'auto',
+          background: 'var(--c-bg-card)', flexShrink: 0,
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 'var(--space-md)' }}>
+            <div style={{ fontSize: '0.6875rem', fontWeight: 600, color: 'var(--c-text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
+              Chi tiết khái niệm
             </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem' }}>
-              <span style={{ color: 'var(--c-text-tertiary)' }}>Related Chunks</span>
-              <span style={{ color: 'var(--c-text-primary)', fontWeight: 600 }}>{selectedNodeData.related_chunk_ids?.length || 0}</span>
-            </div>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem' }}>
-              <span style={{ color: 'var(--c-text-tertiary)' }}>Connections</span>
-              <span style={{ color: 'var(--c-text-primary)', fontWeight: 600 }}>
-                {edgesRef.current.filter(e => e.sourceIdx === selectedNode || e.targetIdx === selectedNode).length}
-              </span>
-            </div>
+            <button onClick={() => setSelectedNode(-1)} style={{
+              background: 'transparent', border: 'none', cursor: 'pointer',
+              color: 'var(--c-text-tertiary)', display: 'flex', padding: 2,
+            }}>
+              <X size={14} />
+            </button>
           </div>
 
-          {/* Connected concepts */}
-          <div style={{ marginTop: 'var(--space-lg)', fontSize: '0.6875rem', fontWeight: 600, color: 'var(--c-text-tertiary)', textTransform: 'uppercase', marginBottom: 'var(--space-sm)' }}>
-            Connected To
+          <div style={{ fontSize: '1.0625rem', fontWeight: 700, color: 'var(--c-text-primary)', marginBottom: 'var(--space-lg)', letterSpacing: '-0.02em' }}>
+            {selectedNodeData.concept}
           </div>
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
-            {edgesRef.current
-              .filter(e => e.sourceIdx === selectedNode || e.targetIdx === selectedNode)
-              .map((e, i) => {
+
+          {/* Stats */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {[
+              { label: 'Centrality', value: `${((selectedNodeData.centrality_score || 0) * 100).toFixed(1)}%` },
+              { label: 'Kết nối', value: selectedEdges.length },
+              { label: 'Chunks liên quan', value: selectedNodeData.related_chunk_ids?.length || 0 },
+              ...(selectedNodeData.mastery != null ? [{ label: 'Mastery', value: `${Math.round(selectedNodeData.mastery * 100)}%` }] : []),
+            ].map(({ label, value }) => (
+              <div key={label} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8125rem' }}>
+                <span style={{ color: 'var(--c-text-tertiary)' }}>{label}</span>
+                <span style={{ color: 'var(--c-text-primary)', fontWeight: 600 }}>{value}</span>
+              </div>
+            ))}
+          </div>
+
+          {/* Mastery bar */}
+          {selectedNodeData.mastery != null && (
+            <div style={{ marginTop: 'var(--space-md)' }}>
+              <div className="progress-bar" style={{ height: 4 }}>
+                <div className="progress-bar-fill" style={{
+                  width: `${Math.round(selectedNodeData.mastery * 100)}%`,
+                  background: getMasteryColor(selectedNodeData.mastery),
+                }} />
+              </div>
+            </div>
+          )}
+
+          {/* Connected concepts */}
+          <div style={{ marginTop: 'var(--space-xl)' }}>
+            <div style={{ fontSize: '0.6875rem', fontWeight: 600, color: 'var(--c-text-tertiary)', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 'var(--space-sm)' }}>
+              Kết nối tới
+            </div>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4 }}>
+              {selectedEdges.map((e, i) => {
                 const otherIdx = e.sourceIdx === selectedNode ? e.targetIdx : e.sourceIdx;
-                const other = nodesRef.current[otherIdx];
-                return other ? (
-                  <span key={i} onClick={() => setSelectedNode(otherIdx)} style={{
-                    fontSize: '0.6875rem', padding: '0.25rem 0.5rem',
+                const other = engineRef.current?.nodes[otherIdx];
+                if (!other) return null;
+                return (
+                  <button key={i} onClick={() => setSelectedNode(otherIdx)} style={{
+                    fontSize: '0.6875rem', padding: '0.25rem 0.625rem',
                     borderRadius: 'var(--radius-full)', background: 'var(--c-accent-glow)',
                     color: 'var(--c-accent)', cursor: 'pointer', fontWeight: 500,
-                  }}>
+                    border: 'none', transition: 'all var(--duration-fast)',
+                  }}
+                    onMouseEnter={e => { e.currentTarget.style.background = 'rgba(99,102,241,0.2)'; }}
+                    onMouseLeave={e => { e.currentTarget.style.background = 'var(--c-accent-glow)'; }}
+                  >
                     {other.concept}
-                  </span>
-                ) : null;
+                    {e.relation && <span style={{ marginLeft: 4, opacity: 0.6 }}>({e.relation})</span>}
+                  </button>
+                );
               })}
+              {selectedEdges.length === 0 && (
+                <span style={{ fontSize: '0.75rem', color: 'var(--c-text-muted)' }}>Không có kết nối</span>
+              )}
+            </div>
           </div>
         </div>
       )}

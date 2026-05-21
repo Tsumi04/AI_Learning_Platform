@@ -305,7 +305,7 @@ function UploadModal({ onClose, onSuccess }) {
 
   return (
     <div className="animate-fade-in" style={{ position: 'fixed', inset: 0, zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0, 0, 0, 0.3)', backdropFilter: 'blur(8px)' }} onClick={onClose}>
-      <div className="animate-scale-in" style={{ width: '100%', maxWidth: 520, borderRadius: 'var(--radius-xl)', padding: 'var(--space-xl)', background: 'white', border: '1px solid var(--c-border)', boxShadow: 'var(--shadow-xl)' }} onClick={e => e.stopPropagation()}>
+      <div className="animate-scale-in" style={{ width: '100%', maxWidth: 520, borderRadius: 'var(--radius-xl)', padding: 'var(--space-xl)', background: 'var(--c-bg-card)', border: '1px solid var(--c-border)', boxShadow: 'var(--shadow-xl)' }} onClick={e => e.stopPropagation()}>
         <h2 style={{ fontSize: '1.25rem', fontWeight: 700, color: 'var(--c-text-primary)', marginBottom: 'var(--space-lg)', letterSpacing: '-0.02em' }}>Upload Document</h2>
         <div style={{ border: `2px dashed ${dragOver ? 'var(--c-accent)' : 'var(--c-border)'}`, borderRadius: 'var(--radius-lg)', padding: 'var(--space-2xl)', textAlign: 'center', transition: 'all var(--duration-normal)', background: dragOver ? 'var(--c-accent-glow)' : 'var(--c-bg-secondary)', cursor: 'pointer', marginBottom: 'var(--space-lg)' }}
           onDragOver={e => { e.preventDefault(); setDragOver(true); }} onDragLeave={() => setDragOver(false)} onDrop={handleDrop}

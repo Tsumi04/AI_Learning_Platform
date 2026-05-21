@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import useAuthStore from '../store/useAuthStore';
 import { Mail, Lock, User, ArrowRight, Sparkles } from 'lucide-react';
+import ThemeToggle from '../components/layout/ThemeToggle';
 
 export default function Register() {
   const { register, isLoading, error, clearError } = useAuthStore();
@@ -40,7 +41,12 @@ export default function Register() {
       minHeight: '100vh',
       display: 'flex',
       background: 'var(--c-bg-primary)',
+      position: 'relative',
     }}>
+      {/* Theme Toggle — góc trên phải */}
+      <div style={{ position: 'absolute', top: 20, right: 20, zIndex: 10 }}>
+        <ThemeToggle />
+      </div>
       {/* Left — Form */}
       <div style={{
         flex: 1,
@@ -197,7 +203,7 @@ export default function Register() {
 
             {/* Google Sign Up */}
             <a
-              href="http://localhost:5000/api/auth/google"
+              href="http://localhost:5001/api/auth/google"
               className="btn btn-ghost btn-lg"
               style={{ width: '100%', gap: 'var(--space-md)', textDecoration: 'none' }}
             >

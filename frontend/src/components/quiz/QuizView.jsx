@@ -1,26 +1,99 @@
-import { useState, useEffect } from 'react';
-import { HelpCircle, CheckCircle, XCircle, ArrowRight, RotateCcw, Trophy, Loader2 } from 'lucide-react';
-import { aiAPI } from '../../services/api';
+import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import {
+  HelpCircle, CheckCircle, XCircle, ArrowRight, RotateCcw,
+  Trophy, Loader2, Clock, Brain, Zap, AlertCircle,
+  ChevronDown, Lightbulb, Check, X,
+} from 'lucide-react';
+import { aiAPI, learningAPI } from '../../services/api';
+import QuizTimer, { useQuizTimer } from './QuizTimer';
+import QuizScoreBoard from './QuizScoreBoard';
+
+/**
+ * QuizView v2 — Premium Quiz Interface
+ * 
+ * Features:
+ * - Timer (tổng + per-question optional countdown)
+ * - 3 loại câu hỏi: MCQ, Fill-in-blank, True/False
+ * - Bloom's Taxonomy badges
+ * - Explanations sau khi trả lời
+ * - Difficulty selector (Easy/Medium/Hard)
+ * - Question type filter
+ * - Animated transitions
+ * - Detailed score board
+ * - Record activity vào backend
+ */
+
+const DIFFICULTY_OPTIONS = [
+  { value: 0.3, label: 'Easy', color: '#34d399', icon: '🟢' },
+  { value: 0.5, label: 'Medium', color: '#fbbf24', icon: '🟡' },
+  { value: 0.8, label: 'Hard', color: '#f87171', icon: '🔴' },
+];
+
+const BLOOM_LABELS = {
+  remember: 'Remember', understand: 'Understand', apply: 'Apply',
+  analyze: 'Analyze', evaluate: 'Evaluate', create: 'Create',
+};
+
+const BLOOM_COLORS = {
+  remember: '#94a3b8', understand: '#6366f1', apply: '#8b5cf6',
+  analyze: '#3b82f6', evaluate: '#f59e0b', create: '#34d399',
+};
 
 export default function QuizView({ documentId }) {
+  // ── Config state ──
+  const [numQuestions, setNumQuestions] = useState(5);
+  const [difficulty, setDifficulty] = useState(0.5);
+  const [enableTimer, setEnableTimer] = useState(false);
+  const [timePerQuestion, setTimePerQuestion] = useState(30);
+
+  // ── Quiz state ──
   const [questions, setQuestions] = useState([]);
   const [currentIndex, setCurrentIndex] = useState(0);
+  const [answers, setAnswers] = useState([]); // { answer, isCorrect, timeSpent }
   const [selectedAnswer, setSelectedAnswer] = useState(null);
   const [showResult, setShowResult] = useState(false);
-  const [score, setScore] = useState(0);
   const [isLoading, setIsLoading] = useState(false);
   const [isFinished, setIsFinished] = useState(false);
   const [error, setError] = useState('');
-  const [numQuestions, setNumQuestions] = useState(5);
   const [started, setStarted] = useState(false);
+  const [fillAnswer, setFillAnswer] = useState('');
+  const [shuffledOptions, setShuffledOptions] = useState([]);
 
+  // ── Timer ──
+  const timer = useQuizTimer();
+  const questionStartRef = useRef(Date.now());
+
+  // ── Shuffle options khi chuyển câu ──
+  useEffect(() => {
+    if (questions.length === 0 || currentIndex >= questions.length) return;
+    const q = questions[currentIndex];
+    if (q.question_type === 'mcq') {
+      const opts = [q.correct_answer, ...(q.distractors || [])];
+      setShuffledOptions(shuffleArray(opts));
+    } else if (q.question_type === 'true_false') {
+      setShuffledOptions(['True', 'False']);
+    } else {
+      setShuffledOptions([]);
+    }
+    questionStartRef.current = Date.now();
+  }, [currentIndex, questions]);
+
+  // ── Generate quiz ──
   const generateQuiz = async () => {
     try {
-      setIsLoading(true); setError(''); setStarted(true);
-      const data = await aiAPI.generateQuiz(documentId, numQuestions, 0.5);
+      setIsLoading(true);
+      setError('');
+      setStarted(true);
+      const data = await aiAPI.generateQuiz(documentId, numQuestions, difficulty);
       if (data.questions && data.questions.length > 0) {
         setQuestions(data.questions);
-        setCurrentIndex(0); setScore(0); setIsFinished(false);
+        setCurrentIndex(0);
+        setAnswers([]);
+        setIsFinished(false);
+        setSelectedAnswer(null);
+        setShowResult(false);
+        setFillAnswer('');
+        timer.start();
       } else {
         setError('No questions generated. The document may need more content.');
       }
@@ -31,145 +104,484 @@ export default function QuizView({ documentId }) {
     }
   };
 
-  const handleAnswer = (answer) => {
+  // ── Handle answer ──
+  const handleAnswer = useCallback((answer) => {
     if (showResult) return;
+    const q = questions[currentIndex];
+    const timeSpent = Math.round((Date.now() - questionStartRef.current) / 1000);
+    
+    let isCorrect = false;
+    if (q.question_type === 'fill_blank') {
+      isCorrect = answer.trim().toLowerCase() === q.correct_answer.trim().toLowerCase();
+    } else {
+      isCorrect = answer === q.correct_answer;
+    }
+
     setSelectedAnswer(answer);
     setShowResult(true);
-    const q = questions[currentIndex];
-    if (answer === q.correct_answer) setScore(prev => prev + 1);
-  };
+    setAnswers(prev => [...prev, { answer, isCorrect, timeSpent }]);
+  }, [showResult, questions, currentIndex]);
 
-  const handleNext = () => {
+  // ── Time up handler ──
+  const handleTimeUp = useCallback(() => {
+    if (!showResult) {
+      const timeSpent = Math.round((Date.now() - questionStartRef.current) / 1000);
+      setSelectedAnswer(null);
+      setShowResult(true);
+      setAnswers(prev => [...prev, { answer: null, isCorrect: false, timeSpent }]);
+    }
+  }, [showResult]);
+
+  // ── Next question ──
+  const handleNext = async () => {
     if (currentIndex < questions.length - 1) {
       setCurrentIndex(prev => prev + 1);
-      setSelectedAnswer(null); setShowResult(false);
+      setSelectedAnswer(null);
+      setShowResult(false);
+      setFillAnswer('');
     } else {
+      timer.stop();
       setIsFinished(true);
+      // Record activity vào backend
+      try {
+        const correct = answers.filter(a => a.isCorrect).length;
+        await learningAPI.recordActivity('quiz', documentId, timer.getElapsed(), {
+          quiz: {
+            total_questions: questions.length,
+            correct_answers: correct,
+            score_percentage: Math.round((correct / questions.length) * 100),
+            difficulty,
+          },
+        });
+      } catch (e) {
+        console.warn('Could not record quiz activity:', e.message);
+      }
     }
   };
 
+  // ── Restart ──
   const restart = () => {
-    setCurrentIndex(0); setSelectedAnswer(null);
-    setShowResult(false); setScore(0);
-    setIsFinished(false); setStarted(false);
+    setCurrentIndex(0);
+    setSelectedAnswer(null);
+    setShowResult(false);
+    setAnswers([]);
+    setIsFinished(false);
+    setStarted(false);
     setQuestions([]);
+    setFillAnswer('');
+    timer.stop();
   };
 
+  // ══════════════════════════════════════════
+  // RENDER: Start Screen
+  // ══════════════════════════════════════════
   if (!started) {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 'var(--space-xl)', padding: 'var(--space-xl)' }}>
-        <div style={{ width: 72, height: 72, borderRadius: 'var(--radius-xl)', background: 'rgba(139,92,246,0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <HelpCircle size={32} style={{ color: '#8b5cf6' }} strokeWidth={1.5} />
+      <div className="animate-fade-in-up" style={{
+        display: 'flex', flexDirection: 'column', alignItems: 'center',
+        justifyContent: 'center', height: '100%', gap: 'var(--space-xl)',
+        padding: 'var(--space-xl)',
+      }}>
+        <div style={{
+          width: 80, height: 80, borderRadius: 'var(--radius-xl)',
+          background: 'rgba(139,92,246,0.1)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+        }}>
+          <Brain size={36} style={{ color: '#8b5cf6' }} strokeWidth={1.5} />
         </div>
+
         <div style={{ textAlign: 'center' }}>
-          <h3 style={{ fontSize: '1.25rem', fontWeight: 600, color: 'var(--c-text-primary)', marginBottom: 8 }}>AI Quiz Generator</h3>
-          <p style={{ fontSize: '0.9375rem', color: 'var(--c-text-secondary)', maxWidth: 400 }}>
-            Generate quiz questions from your document content. Test your understanding with MCQ and fill-in-the-blank questions.
+          <h3 style={{ fontSize: '1.375rem', fontWeight: 700, color: 'var(--c-text-primary)', marginBottom: 8 }}>
+            AI Quiz Generator
+          </h3>
+          <p style={{ fontSize: '0.875rem', color: 'var(--c-text-secondary)', maxWidth: 420 }}>
+            Generate quiz questions powered by Bloom's Taxonomy. Supports MCQ, Fill-in-blank, and True/False.
           </p>
         </div>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-md)' }}>
-          <label style={{ fontSize: '0.8125rem', color: 'var(--c-text-secondary)' }}>Questions:</label>
-          <select value={numQuestions} onChange={e => setNumQuestions(Number(e.target.value))} style={{ padding: '0.5rem 1rem', borderRadius: 'var(--radius-md)', border: '1px solid var(--c-border)', fontSize: '0.875rem', background: 'var(--c-bg-card)', fontFamily: 'var(--font-sans)' }}>
-            {[3, 5, 10, 15].map(n => <option key={n} value={n}>{n}</option>)}
-          </select>
+
+        {/* Config Panel */}
+        <div style={{
+          display: 'flex', flexDirection: 'column', gap: 'var(--space-lg)',
+          width: '100%', maxWidth: 400,
+          padding: 'var(--space-xl)',
+          background: 'var(--c-bg-card)', borderRadius: 'var(--radius-xl)',
+          border: '1px solid var(--c-border)',
+        }}>
+          {/* Questions count */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <label style={{ fontSize: '0.8125rem', fontWeight: 500, color: 'var(--c-text-secondary)' }}>
+              Questions
+            </label>
+            <select
+              value={numQuestions}
+              onChange={e => setNumQuestions(Number(e.target.value))}
+              style={{
+                padding: '0.4rem 0.75rem', borderRadius: 'var(--radius-md)',
+                border: '1px solid var(--c-border)', fontSize: '0.8125rem',
+                background: 'var(--c-bg-secondary)', color: 'var(--c-text-primary)',
+                fontFamily: 'var(--font-sans)', cursor: 'pointer',
+              }}
+            >
+              {[3, 5, 10, 15, 20].map(n => <option key={n} value={n}>{n}</option>)}
+            </select>
+          </div>
+
+          {/* Difficulty */}
+          <div>
+            <label style={{ fontSize: '0.8125rem', fontWeight: 500, color: 'var(--c-text-secondary)', marginBottom: 8, display: 'block' }}>
+              Difficulty
+            </label>
+            <div style={{ display: 'flex', gap: 'var(--space-sm)' }}>
+              {DIFFICULTY_OPTIONS.map(opt => (
+                <button
+                  key={opt.value}
+                  onClick={() => setDifficulty(opt.value)}
+                  style={{
+                    flex: 1, padding: '0.5rem', borderRadius: 'var(--radius-md)',
+                    border: `1.5px solid ${difficulty === opt.value ? opt.color : 'var(--c-border)'}`,
+                    background: difficulty === opt.value ? `${opt.color}15` : 'transparent',
+                    cursor: 'pointer', fontSize: '0.75rem', fontWeight: 600,
+                    color: difficulty === opt.value ? opt.color : 'var(--c-text-tertiary)',
+                    transition: 'all var(--duration-fast)',
+                  }}
+                >
+                  {opt.icon} {opt.label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Timer toggle */}
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+            <label style={{ fontSize: '0.8125rem', fontWeight: 500, color: 'var(--c-text-secondary)' }}>
+              <Clock size={13} style={{ verticalAlign: 'middle', marginRight: 4 }} />
+              Timer per question
+            </label>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-sm)' }}>
+              {enableTimer && (
+                <select
+                  value={timePerQuestion}
+                  onChange={e => setTimePerQuestion(Number(e.target.value))}
+                  style={{
+                    padding: '0.3rem 0.5rem', borderRadius: 'var(--radius-sm)',
+                    border: '1px solid var(--c-border)', fontSize: '0.75rem',
+                    background: 'var(--c-bg-secondary)', color: 'var(--c-text-primary)',
+                    fontFamily: 'var(--font-sans)',
+                  }}
+                >
+                  {[15, 30, 45, 60, 90].map(s => <option key={s} value={s}>{s}s</option>)}
+                </select>
+              )}
+              <button
+                onClick={() => setEnableTimer(!enableTimer)}
+                style={{
+                  width: 40, height: 22, borderRadius: 11,
+                  border: 'none', cursor: 'pointer',
+                  background: enableTimer ? 'var(--c-accent)' : 'var(--c-bg-tertiary)',
+                  position: 'relative', transition: 'background 0.2s',
+                }}
+              >
+                <div style={{
+                  width: 16, height: 16, borderRadius: '50%', background: 'white',
+                  position: 'absolute', top: 3,
+                  left: enableTimer ? 21 : 3,
+                  transition: 'left 0.2s var(--ease-spring)',
+                  boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+                }} />
+              </button>
+            </div>
+          </div>
         </div>
-        <button className="btn btn-primary btn-lg" onClick={generateQuiz}>
-          <Sparkles size={18} /> Generate Quiz
+
+        <button className="btn btn-primary btn-lg" onClick={generateQuiz} style={{ minWidth: 200 }}>
+          <Zap size={18} /> Start Quiz
         </button>
       </div>
     );
   }
 
+  // ══════════════════════════════════════════
+  // RENDER: Loading
+  // ══════════════════════════════════════════
   if (isLoading) {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 'var(--space-lg)' }}>
-        <Loader2 size={32} style={{ color: 'var(--c-accent)', animation: 'rotate-slow 1s linear infinite' }} />
-        <div style={{ fontSize: '0.9375rem', color: 'var(--c-text-secondary)' }}>Generating quiz questions...</div>
+      <div style={{
+        display: 'flex', flexDirection: 'column', alignItems: 'center',
+        justifyContent: 'center', height: '100%', gap: 'var(--space-lg)',
+      }}>
+        <Loader2 size={36} style={{ color: 'var(--c-accent)', animation: 'rotate-slow 1s linear infinite' }} />
+        <div style={{ textAlign: 'center' }}>
+          <div style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--c-text-primary)', marginBottom: 4 }}>
+            Generating Quiz...
+          </div>
+          <div style={{ fontSize: '0.8125rem', color: 'var(--c-text-tertiary)' }}>
+            AI is creating {numQuestions} questions using Bloom's Taxonomy
+          </div>
+        </div>
       </div>
     );
   }
 
+  // ══════════════════════════════════════════
+  // RENDER: Error
+  // ══════════════════════════════════════════
   if (error) {
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 'var(--space-lg)' }}>
-        <div style={{ color: 'var(--c-error)', fontSize: '0.9375rem' }}>{error}</div>
-        <button className="btn btn-ghost" onClick={restart}><RotateCcw size={16} /> Try Again</button>
+      <div style={{
+        display: 'flex', flexDirection: 'column', alignItems: 'center',
+        justifyContent: 'center', height: '100%', gap: 'var(--space-lg)',
+      }}>
+        <AlertCircle size={36} style={{ color: 'var(--c-error)' }} />
+        <div style={{ color: 'var(--c-error)', fontSize: '0.9375rem', textAlign: 'center', maxWidth: 400 }}>{error}</div>
+        <button className="btn btn-ghost" onClick={restart}>
+          <RotateCcw size={16} /> Try Again
+        </button>
       </div>
     );
   }
 
+  // ══════════════════════════════════════════
+  // RENDER: Score Board
+  // ══════════════════════════════════════════
   if (isFinished) {
-    const pct = Math.round((score / questions.length) * 100);
     return (
-      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', gap: 'var(--space-xl)' }}>
-        <div style={{ width: 80, height: 80, borderRadius: '50%', background: pct >= 70 ? 'var(--c-success-glow)' : 'var(--c-warning-glow)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-          <Trophy size={36} style={{ color: pct >= 70 ? 'var(--c-success)' : '#b45309' }} />
-        </div>
-        <div style={{ textAlign: 'center' }}>
-          <div style={{ fontSize: '2rem', fontWeight: 800, color: 'var(--c-text-primary)' }}>{pct}%</div>
-          <div style={{ fontSize: '1rem', color: 'var(--c-text-secondary)' }}>{score} / {questions.length} correct</div>
-        </div>
-        <button className="btn btn-primary" onClick={restart}><RotateCcw size={16} /> Take Another Quiz</button>
-      </div>
+      <QuizScoreBoard
+        questions={questions}
+        answers={answers}
+        totalSeconds={timer.getElapsed()}
+        onRestart={restart}
+      />
     );
   }
 
+  // ══════════════════════════════════════════
+  // RENDER: Active Question
+  // ══════════════════════════════════════════
   const q = questions[currentIndex];
-  const allOptions = q.question_type === 'mcq' ? [q.correct_answer, ...(q.distractors || [])].sort(() => Math.random() - 0.5) : [];
+  const score = answers.filter(a => a.isCorrect).length;
+  const bloomLevel = q.bloom_level || 'remember';
+  const bloomColor = BLOOM_COLORS[bloomLevel] || '#94a3b8';
 
   return (
-    <div style={{ padding: 'var(--space-xl)', height: '100%', display: 'flex', flexDirection: 'column' }}>
-      {/* Progress */}
-      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 'var(--space-lg)' }}>
-        <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--c-text-secondary)' }}>Question {currentIndex + 1} / {questions.length}</span>
-        <span style={{ fontSize: '0.8125rem', color: 'var(--c-text-tertiary)' }}>Score: {score}</span>
+    <div style={{ padding: 'var(--space-lg)', height: '100%', display: 'flex', flexDirection: 'column' }}>
+      {/* ── Header: Progress + Timer + Score ── */}
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        marginBottom: 'var(--space-md)', flexShrink: 0,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-md)' }}>
+          <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--c-text-secondary)' }}>
+            {currentIndex + 1} / {questions.length}
+          </span>
+          {/* Bloom badge */}
+          <span style={{
+            padding: '0.2rem 0.5rem', borderRadius: 'var(--radius-full)',
+            fontSize: '0.625rem', fontWeight: 600,
+            background: `${bloomColor}18`, color: bloomColor,
+            border: `1px solid ${bloomColor}30`,
+          }}>
+            {BLOOM_LABELS[bloomLevel] || bloomLevel}
+          </span>
+        </div>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-md)' }}>
+          <QuizTimer
+            timeLimit={enableTimer ? timePerQuestion : 0}
+            isRunning={!showResult}
+            onTimeUp={handleTimeUp}
+            questionIndex={currentIndex}
+          />
+          <span style={{
+            fontSize: '0.75rem', fontWeight: 600, color: 'var(--c-success)',
+            fontFamily: 'var(--font-mono)',
+          }}>
+            {score} pts
+          </span>
+        </div>
       </div>
-      <div className="progress-bar" style={{ marginBottom: 'var(--space-xl)' }}>
+
+      {/* Progress bar */}
+      <div className="progress-bar" style={{ marginBottom: 'var(--space-lg)', flexShrink: 0 }}>
         <div className="progress-bar-fill" style={{ width: `${((currentIndex + 1) / questions.length) * 100}%` }} />
       </div>
 
-      {/* Question */}
+      {/* ── Question Body ── */}
       <div style={{ flex: 1, overflow: 'auto' }}>
-        <div style={{ fontSize: '0.6875rem', fontWeight: 600, color: 'var(--c-accent)', textTransform: 'uppercase', marginBottom: 8 }}>
-          {q.question_type === 'mcq' ? 'Multiple Choice' : 'Fill in the Blank'}
+        {/* Type badge */}
+        <div style={{
+          fontSize: '0.625rem', fontWeight: 600, color: 'var(--c-accent)',
+          textTransform: 'uppercase', letterSpacing: '0.05em', marginBottom: 8,
+        }}>
+          {q.question_type === 'mcq' ? 'Multiple Choice'
+            : q.question_type === 'true_false' ? 'True or False'
+            : 'Fill in the Blank'}
         </div>
-        <h3 style={{ fontSize: '1.125rem', fontWeight: 600, color: 'var(--c-text-primary)', lineHeight: 1.5, marginBottom: 'var(--space-xl)' }}>
+
+        <h3 style={{
+          fontSize: '1.125rem', fontWeight: 600, color: 'var(--c-text-primary)',
+          lineHeight: 1.6, marginBottom: 'var(--space-xl)',
+        }}>
           {q.question_text}
         </h3>
 
-        {q.question_type === 'mcq' ? (
+        {/* ── MCQ Options ── */}
+        {q.question_type === 'mcq' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 'var(--space-sm)' }}>
-            {allOptions.map((opt, i) => {
+            {shuffledOptions.map((opt, i) => {
               const isCorrect = opt === q.correct_answer;
               const isSelected = selectedAnswer === opt;
               let cls = 'quiz-option';
               if (showResult && isCorrect) cls += ' correct';
               else if (showResult && isSelected && !isCorrect) cls += ' incorrect';
               else if (isSelected) cls += ' selected';
+
               return (
                 <div key={i} className={cls} onClick={() => handleAnswer(opt)}>
-                  <div style={{ width: 24, height: 24, borderRadius: '50%', border: '2px solid var(--c-border)', display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, background: showResult && isCorrect ? 'var(--c-success)' : showResult && isSelected ? 'var(--c-error)' : 'transparent' }}>
-                    {showResult && isCorrect && <CheckCircle size={14} color="white" />}
-                    {showResult && isSelected && !isCorrect && <XCircle size={14} color="white" />}
+                  <div style={{
+                    width: 26, height: 26, borderRadius: '50%',
+                    border: `2px solid ${showResult && isCorrect ? 'var(--c-success)' : showResult && isSelected ? 'var(--c-error)' : 'var(--c-border)'}`,
+                    display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+                    background: showResult && isCorrect ? 'var(--c-success)' : showResult && isSelected ? 'var(--c-error)' : 'transparent',
+                    transition: 'all 0.2s ease',
+                  }}>
+                    {showResult && isCorrect && <Check size={14} color="white" strokeWidth={3} />}
+                    {showResult && isSelected && !isCorrect && <X size={14} color="white" strokeWidth={3} />}
+                    {!showResult && (
+                      <span style={{ fontSize: '0.6875rem', fontWeight: 600, color: 'var(--c-text-tertiary)' }}>
+                        {String.fromCharCode(65 + i)}
+                      </span>
+                    )}
                   </div>
-                  <span style={{ fontSize: '0.9375rem', color: 'var(--c-text-primary)' }}>{opt}</span>
+                  <span style={{ fontSize: '0.9375rem', color: 'var(--c-text-primary)', lineHeight: 1.5 }}>{opt}</span>
                 </div>
               );
             })}
           </div>
-        ) : (
+        )}
+
+        {/* ── True/False Options ── */}
+        {q.question_type === 'true_false' && (
+          <div style={{ display: 'flex', gap: 'var(--space-md)' }}>
+            {['True', 'False'].map(opt => {
+              const isCorrect = opt === q.correct_answer;
+              const isSelected = selectedAnswer === opt;
+              let borderColor = 'var(--c-border)';
+              let bg = 'var(--c-bg-card)';
+              if (showResult && isCorrect) { borderColor = 'var(--c-success)'; bg = 'var(--c-success-glow)'; }
+              else if (showResult && isSelected && !isCorrect) { borderColor = 'var(--c-error)'; bg = 'var(--c-error-glow)'; }
+              else if (isSelected) { borderColor = 'var(--c-accent)'; bg = 'var(--c-accent-glow)'; }
+
+              return (
+                <button
+                  key={opt}
+                  onClick={() => handleAnswer(opt)}
+                  disabled={showResult}
+                  style={{
+                    flex: 1, padding: 'var(--space-xl)', borderRadius: 'var(--radius-lg)',
+                    border: `2px solid ${borderColor}`, background: bg,
+                    cursor: showResult ? 'default' : 'pointer',
+                    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 'var(--space-sm)',
+                    transition: 'all 0.2s ease', fontFamily: 'var(--font-sans)',
+                  }}
+                >
+                  <div style={{
+                    width: 44, height: 44, borderRadius: '50%',
+                    background: opt === 'True' ? 'rgba(52,211,153,0.1)' : 'rgba(248,113,113,0.1)',
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                  }}>
+                    {opt === 'True'
+                      ? <CheckCircle size={22} style={{ color: '#34d399' }} />
+                      : <XCircle size={22} style={{ color: '#f87171' }} />}
+                  </div>
+                  <span style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--c-text-primary)' }}>{opt}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+
+        {/* ── Fill in the Blank ── */}
+        {q.question_type === 'fill_blank' && (
           <div>
-            <input className="input" placeholder="Type your answer..." onKeyDown={e => { if (e.key === 'Enter' && e.target.value) handleAnswer(e.target.value); }} style={{ fontSize: '1rem' }} disabled={showResult} />
-            {showResult && <div style={{ marginTop: 'var(--space-md)', fontSize: '0.9375rem', color: 'var(--c-success)', fontWeight: 500 }}>Answer: {q.correct_answer}</div>}
+            <div style={{ display: 'flex', gap: 'var(--space-sm)' }}>
+              <input
+                className="input"
+                value={fillAnswer}
+                onChange={e => setFillAnswer(e.target.value)}
+                placeholder="Type your answer..."
+                onKeyDown={e => { if (e.key === 'Enter' && fillAnswer.trim()) handleAnswer(fillAnswer.trim()); }}
+                disabled={showResult}
+                style={{ fontSize: '1rem', flex: 1 }}
+                autoFocus
+              />
+              {!showResult && fillAnswer.trim() && (
+                <button className="btn btn-primary" onClick={() => handleAnswer(fillAnswer.trim())}>
+                  <ArrowRight size={16} />
+                </button>
+              )}
+            </div>
+            {showResult && (
+              <div style={{
+                marginTop: 'var(--space-md)', padding: 'var(--space-md)',
+                borderRadius: 'var(--radius-md)',
+                background: selectedAnswer && selectedAnswer.toLowerCase() === q.correct_answer.toLowerCase()
+                  ? 'var(--c-success-glow)' : 'var(--c-error-glow)',
+                border: `1px solid ${selectedAnswer && selectedAnswer.toLowerCase() === q.correct_answer.toLowerCase()
+                  ? 'rgba(52,211,153,0.2)' : 'rgba(248,113,113,0.2)'}`,
+              }}>
+                <div style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--c-text-primary)', marginBottom: 2 }}>
+                  Correct answer:
+                </div>
+                <div style={{ fontSize: '1rem', fontWeight: 600, color: 'var(--c-success)' }}>
+                  {q.correct_answer}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ── Explanation ── */}
+        {showResult && q.explanation && (
+          <div className="animate-fade-in-up" style={{
+            marginTop: 'var(--space-lg)', padding: 'var(--space-md)',
+            background: 'rgba(99,102,241,0.06)',
+            borderRadius: 'var(--radius-md)',
+            border: '1px solid rgba(99,102,241,0.12)',
+          }}>
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 6,
+              fontSize: '0.6875rem', fontWeight: 600, color: 'var(--c-accent)',
+              marginBottom: 6,
+            }}>
+              <Lightbulb size={13} /> Explanation
+            </div>
+            <div style={{ fontSize: '0.8125rem', color: 'var(--c-text-secondary)', lineHeight: 1.6 }}>
+              {q.explanation}
+            </div>
+          </div>
+        )}
+
+        {/* Time up indicator */}
+        {showResult && selectedAnswer === null && (
+          <div className="animate-fade-in" style={{
+            marginTop: 'var(--space-lg)', padding: 'var(--space-md)',
+            background: 'var(--c-warning-glow)', borderRadius: 'var(--radius-md)',
+            border: '1px solid rgba(251,191,36,0.2)',
+            display: 'flex', alignItems: 'center', gap: 'var(--space-sm)',
+            fontSize: '0.8125rem', color: '#b45309',
+          }}>
+            <Clock size={14} /> Time's up! The correct answer is: <strong>{q.correct_answer}</strong>
           </div>
         )}
       </div>
 
-      {/* Next */}
+      {/* ── Next Button ── */}
       {showResult && (
-        <div style={{ paddingTop: 'var(--space-lg)', borderTop: '1px solid var(--c-border)' }}>
+        <div style={{ paddingTop: 'var(--space-lg)', borderTop: '1px solid var(--c-border)', flexShrink: 0 }}>
           <button className="btn btn-primary" onClick={handleNext} style={{ width: '100%' }}>
-            {currentIndex < questions.length - 1 ? <><span>Next Question</span><ArrowRight size={16} /></> : <><Trophy size={16} /><span>See Results</span></>}
+            {currentIndex < questions.length - 1
+              ? <><span>Next Question</span><ArrowRight size={16} /></>
+              : <><Trophy size={16} /><span>See Results</span></>}
           </button>
         </div>
       )}
@@ -177,6 +589,12 @@ export default function QuizView({ documentId }) {
   );
 }
 
-function Sparkles(props) {
-  return <svg xmlns="http://www.w3.org/2000/svg" width={props.size||24} height={props.size||24} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round"><path d="M12 3l1.912 5.813a2 2 0 001.275 1.275L21 12l-5.813 1.912a2 2 0 00-1.275 1.275L12 21l-1.912-5.813a2 2 0 00-1.275-1.275L3 12l5.813-1.912a2 2 0 001.275-1.275z"/></svg>;
+/** Fisher-Yates shuffle (immutable) */
+function shuffleArray(arr) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
 }

@@ -146,6 +146,64 @@ export const documentsAPI = {
 
   delete: (id) =>
     fetchAPI(`/documents/${id}`, { method: 'DELETE' }),
+
+  /**
+   * Lấy URL để embed file gốc (PDF, TXT) trong viewer
+   * Trả về blob URL — gọi URL.revokeObjectURL() khi unmount
+   */
+  getFileBlob: async (id) => {
+    const url = `${API_BASE}/documents/${id}/file`;
+    const headers = {};
+    if (accessToken) {
+      headers['Authorization'] = `Bearer ${accessToken}`;
+    }
+    const response = await fetch(url, { headers });
+    if (!response.ok) {
+      throw new Error(`Failed to load file: HTTP ${response.status}`);
+    }
+    const blob = await response.blob();
+    return {
+      blobUrl: URL.createObjectURL(blob),
+      mimeType: response.headers.get('Content-Type') || 'application/octet-stream',
+    };
+  },
+};
+
+// ──── Annotations API ────
+
+export const annotationsAPI = {
+  /**
+   * Lấy tất cả annotations cho 1 document
+   */
+  list: (documentId) =>
+    fetchAPI(`/annotations/${documentId}`),
+
+  /**
+   * Tạo annotation mới
+   * @param {object} data - { document_id, type, text_selection?, chunk_index?, content?, color? }
+   */
+  create: (data) =>
+    fetchAPI('/annotations', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    }),
+
+  /**
+   * Cập nhật annotation
+   * @param {string} id - Annotation ID
+   * @param {object} updates - { content?, color?, is_pinned? }
+   */
+  update: (id, updates) =>
+    fetchAPI(`/annotations/${id}`, {
+      method: 'PUT',
+      body: JSON.stringify(updates),
+    }),
+
+  /**
+   * Xóa annotation
+   */
+  delete: (id) =>
+    fetchAPI(`/annotations/${id}`, { method: 'DELETE' }),
 };
 
 // ──── AI API ────
@@ -167,13 +225,14 @@ export const aiAPI = {
   /**
    * Generate quiz from document
    */
-  generateQuiz: (documentId, numQuestions = 10, difficulty = 0.5) =>
+  generateQuiz: (documentId, numQuestions = 10, difficulty = 0.5, questionTypes = ['mcq', 'fill_blank', 'true_false']) =>
     fetchAPI('/ai/quiz', {
       method: 'POST',
       body: JSON.stringify({
         document_id: documentId,
         num_questions: numQuestions,
         difficulty,
+        question_types: questionTypes,
       }),
     }),
 
@@ -220,6 +279,22 @@ export const aiAPI = {
     }),
 
   /**
+   * Generate summary from document
+   * @param {string} documentId - Document ID
+   * @param {number} maxSentences - Số câu tối đa (1-20)
+   * @param {string} summaryType - 'extractive' hoặc 'abstractive'
+   */
+  generateSummary: (documentId, maxSentences = 5, summaryType = 'extractive') =>
+    fetchAPI('/ai/summary', {
+      method: 'POST',
+      body: JSON.stringify({
+        document_id: documentId,
+        max_sentences: maxSentences,
+        summary_type: summaryType,
+      }),
+    }),
+
+  /**
    * Get AI Core stats for dashboard
    */
   getStats: async () => {
@@ -233,6 +308,74 @@ export const aiAPI = {
         llm_available: false,
       };
     }
+  },
+};
+
+// ──── Learning API ────
+
+export const learningAPI = {
+  /**
+   * Lấy toàn bộ dashboard stats: streak, heatmap, weekly, mastery
+   */
+  getDashboardStats: async () => {
+    try {
+      return await fetchAPI('/learning/dashboard-stats');
+    } catch {
+      return null;
+    }
+  },
+
+  /**
+   * Ghi nhận hoạt động học tập mới
+   * @param {string} type - quiz|flashcard|chat|reading
+   * @param {string} documentId - ID tài liệu
+   * @param {number} durationSeconds - Thời gian (giây)
+   * @param {object} results - Kết quả chi tiết
+   */
+  recordActivity: (type, documentId, durationSeconds, results = {}) =>
+    fetchAPI('/learning/record-activity', {
+      method: 'POST',
+      body: JSON.stringify({
+        type,
+        documentId,
+        durationSeconds,
+        results,
+      }),
+    }),
+
+  /**
+   * Lấy thống kê chi tiết cho Profile v2
+   */
+  getProfileStats: async () => {
+    try {
+      return await fetchAPI('/learning/profile-stats');
+    } catch {
+      return null;
+    }
+  },
+
+  /**
+   * Export toàn bộ dữ liệu học tập (download JSON)
+   */
+  exportData: async () => {
+    const url = `${API_BASE}/learning/export-data`;
+    const headers = {};
+    if (accessToken) {
+      headers['Authorization'] = `Bearer ${accessToken}`;
+    }
+    const response = await fetch(url, { headers });
+    if (!response.ok) throw new Error('Export failed');
+    const blob = await response.blob();
+    // Trigger download
+    const blobUrl = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = blobUrl;
+    a.download = `neurovault-export-${new Date().toISOString().slice(0, 10)}.json`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(blobUrl);
+    return true;
   },
 };
 

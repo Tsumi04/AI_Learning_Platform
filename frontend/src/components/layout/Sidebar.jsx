@@ -1,155 +1,79 @@
+/**
+ * NeuroVault — Sidebar Navigation
+ *
+ * Desktop (>768px): luôn hiển thị bên trái, width cố định.
+ * Mobile (≤768px): overlay trượt từ trái, có backdrop close.
+ * Props:
+ *   isOpen  — boolean, điều khiển overlay trên mobile.
+ *   onClose — callback đóng sidebar khi chọn menu item trên mobile.
+ */
 import { NavLink, useLocation } from 'react-router-dom';
-import { LayoutGrid, FileText, Brain, User, Sparkles, ChevronRight } from 'lucide-react';
+import { LayoutGrid, FileText, Brain, Network, User, Sparkles, ChevronRight, X } from 'lucide-react';
 
 const menuItems = [
   { name: 'Dashboard', icon: LayoutGrid, path: '/dashboard' },
   { name: 'Documents', icon: FileText, path: '/documents' },
   { name: 'AI Studio', icon: Brain, path: '/ai-studio' },
+  { name: 'Knowledge Graph', icon: Network, path: '/knowledge-graph' },
   { name: 'Profile', icon: User, path: '/profile' },
 ];
 
-export default function Sidebar() {
+export default function Sidebar({ isOpen = false, onClose }) {
   const location = useLocation();
 
+  const handleNavClick = () => {
+    // Đóng sidebar trên mobile khi chọn menu item
+    if (onClose && window.innerWidth <= 768) {
+      onClose();
+    }
+  };
+
   return (
-    <aside style={{
-      width: 'var(--sidebar-width)',
-      height: '100%',
-      display: 'flex',
-      flexDirection: 'column',
-      position: 'relative',
-      zIndex: 2,
-      borderRight: '1px solid var(--c-border)',
-      background: 'white',
-      boxShadow: '1px 0 0 rgba(0,0,0,0.02)',
-    }}>
-      {/* Brand */}
-      <div style={{
-        padding: 'var(--space-xl) var(--space-lg)',
-        display: 'flex',
-        alignItems: 'center',
-        gap: 'var(--space-md)',
-      }}>
-        <div style={{
-          width: 40,
-          height: 40,
-          borderRadius: 'var(--radius-md)',
-          background: 'var(--c-accent-gradient)',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'center',
-          boxShadow: '0 4px 12px rgba(99, 102, 241, 0.25)',
-        }}>
+    <aside className={`app-sidebar ${isOpen ? 'open' : ''}`}>
+      {/* Brand Header */}
+      <div className="sidebar-brand">
+        <div className="sidebar-brand-icon">
           <Sparkles size={20} color="white" strokeWidth={2.5} />
         </div>
-        <div>
-          <div style={{
-            fontSize: '1.0625rem',
-            fontWeight: 700,
-            color: 'var(--c-text-primary)',
-            letterSpacing: '-0.02em',
-          }}>
-            NeuroVault
-          </div>
-          <div style={{
-            fontSize: '0.6875rem',
-            color: 'var(--c-text-tertiary)',
-            fontWeight: 500,
-            letterSpacing: '0.05em',
-            textTransform: 'uppercase',
-          }}>
-            AI Learning
-          </div>
+        <div className="sidebar-brand-text">
+          <div className="sidebar-brand-name">NeuroVault</div>
+          <div className="sidebar-brand-sub">AI Learning</div>
         </div>
+        {/* Nút đóng chỉ hiện trên mobile */}
+        <button className="sidebar-close-btn" onClick={onClose} aria-label="Close sidebar">
+          <X size={20} />
+        </button>
       </div>
 
       {/* Navigation */}
-      <nav style={{
-        flex: 1,
-        padding: '0 var(--space-md)',
-        display: 'flex',
-        flexDirection: 'column',
-        gap: '2px',
-      }}>
+      <nav className="sidebar-nav">
         {menuItems.map((item) => {
           const isActive = location.pathname.startsWith(item.path);
           return (
             <NavLink
               key={item.name}
               to={item.path}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: 'var(--space-md)',
-                padding: '0.75rem 1rem',
-                borderRadius: 'var(--radius-md)',
-                textDecoration: 'none',
-                fontSize: '0.9375rem',
-                fontWeight: isActive ? 600 : 400,
-                color: isActive ? 'var(--c-accent)' : 'var(--c-text-secondary)',
-                background: isActive ? 'var(--c-accent-glow)' : 'transparent',
-                border: isActive ? '1px solid rgba(99, 102, 241, 0.12)' : '1px solid transparent',
-                transition: 'all var(--duration-normal) var(--ease-out-expo)',
-                position: 'relative',
-              }}
-              onMouseEnter={(e) => {
-                if (!isActive) {
-                  e.currentTarget.style.background = 'var(--c-bg-secondary)';
-                  e.currentTarget.style.color = 'var(--c-text-primary)';
-                }
-              }}
-              onMouseLeave={(e) => {
-                if (!isActive) {
-                  e.currentTarget.style.background = 'transparent';
-                  e.currentTarget.style.color = 'var(--c-text-secondary)';
-                }
-              }}
+              className={`sidebar-nav-item ${isActive ? 'active' : ''}`}
+              onClick={handleNavClick}
             >
-              {isActive && (
-                <div style={{
-                  position: 'absolute',
-                  left: -1,
-                  top: '50%',
-                  transform: 'translateY(-50%)',
-                  width: 3,
-                  height: 20,
-                  borderRadius: 'var(--radius-full)',
-                  background: 'var(--c-accent-gradient)',
-                }} />
-              )}
-              <item.icon size={18} strokeWidth={isActive ? 2 : 1.5} 
-                style={{ color: isActive ? 'var(--c-accent)' : 'inherit' }} />
+              {isActive && <div className="sidebar-active-indicator" />}
+              <item.icon
+                size={18}
+                strokeWidth={isActive ? 2 : 1.5}
+                className="sidebar-nav-icon"
+              />
               <span>{item.name}</span>
-              {isActive && <ChevronRight size={14} style={{ marginLeft: 'auto', opacity: 0.5 }} />}
+              {isActive && <ChevronRight size={14} className="sidebar-nav-chevron" />}
             </NavLink>
           );
         })}
       </nav>
 
       {/* Bottom — Version Badge */}
-      <div style={{
-        padding: 'var(--space-lg)',
-        borderTop: '1px solid var(--c-border)',
-      }}>
-        <div style={{
-          padding: '0.75rem',
-          borderRadius: 'var(--radius-md)',
-          background: 'var(--c-bg-secondary)',
-          border: '1px solid var(--c-border)',
-          display: 'flex',
-          alignItems: 'center',
-          gap: 'var(--space-sm)',
-        }}>
-          <div style={{
-            width: 8,
-            height: 8,
-            borderRadius: '50%',
-            background: 'var(--c-success)',
-            boxShadow: '0 0 8px var(--c-success)',
-          }} />
-          <span style={{ fontSize: '0.75rem', color: 'var(--c-text-tertiary)', fontWeight: 500 }}>
-            v1.0 — White-Box AI
-          </span>
+      <div className="sidebar-footer">
+        <div className="sidebar-version">
+          <div className="sidebar-version-dot" />
+          <span>v1.0 — White-Box AI</span>
         </div>
       </div>
     </aside>
