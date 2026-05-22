@@ -220,3 +220,68 @@ def parse_text_file(file_path: str) -> ParsedDocument:
         has_images=False,
         needs_ocr=False,
     )
+
+
+def parse_docx_file(file_path: str) -> ParsedDocument:
+    """
+    Parse DOCX file (.docx) using python-docx.
+    Trích xuất text từ paragraphs + tables, hỗ trợ Unicode/Tiếng Việt.
+    """
+    if not os.path.exists(file_path):
+        raise FileNotFoundError(f"File not found: {file_path}")
+
+    try:
+        from docx import Document as DocxDocument
+    except ImportError:
+        raise ImportError("python-docx is required for .docx parsing. Install with: pip install python-docx")
+
+    doc = DocxDocument(file_path)
+
+    # Extract text from paragraphs
+    paragraphs = []
+    for para in doc.paragraphs:
+        text = para.text.strip()
+        if text:
+            paragraphs.append(text)
+
+    # Extract text from tables
+    table_texts = []
+    for table in doc.tables:
+        for row in table.rows:
+            row_cells = []
+            for cell in row.cells:
+                cell_text = cell.text.strip()
+                if cell_text:
+                    row_cells.append(cell_text)
+            if row_cells:
+                table_texts.append(" | ".join(row_cells))
+
+    # Combine all text
+    all_parts = paragraphs
+    if table_texts:
+        all_parts.append("\n--- Tables ---")
+        all_parts.extend(table_texts)
+
+    full_text = "\n\n".join(all_parts)
+
+    # Extract title from first paragraph or core properties
+    title = "Untitled"
+    if doc.core_properties.title:
+        title = doc.core_properties.title
+    elif paragraphs:
+        title = paragraphs[0][:200]
+
+    # Check for images
+    has_images = False
+    for rel in doc.part.rels.values():
+        if "image" in rel.reltype:
+            has_images = True
+            break
+
+    return ParsedDocument(
+        text=full_text,
+        page_count=max(1, len(paragraphs) // 30),  # Estimate pages
+        title=title[:200],
+        has_images=has_images,
+        needs_ocr=False,
+    )

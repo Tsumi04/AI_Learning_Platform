@@ -406,3 +406,211 @@ export const healthAPI = {
     }
   },
 };
+// ──── Gamification API ────
+
+export const gamificationAPI = {
+  /**
+   * Lấy gamification profile: XP, level, badges, daily challenge
+   */
+  getProfile: async () => {
+    try {
+      return await fetchAPI('/gamification/profile');
+    } catch {
+      return null;
+    }
+  },
+
+  /**
+   * Award XP cho action
+   * @param {string} action - upload_document, complete_quiz, review_flashcard, chat_message
+   * @param {object} metadata - { scorePercent?, cardsReviewed?, durationMinutes? }
+   */
+  awardXP: (action, metadata = {}) =>
+    fetchAPI('/gamification/award-xp', {
+      method: 'POST',
+      body: JSON.stringify({ action, metadata }),
+    }),
+
+  /**
+   * Lấy tất cả badges (earned + available)
+   */
+  getBadges: async () => {
+    try {
+      return await fetchAPI('/gamification/badges');
+    } catch {
+      return { earned: 0, total: 0, badges: [] };
+    }
+  },
+
+  /**
+   * Lấy leaderboard (top 10)
+   */
+  getLeaderboard: async () => {
+    try {
+      return await fetchAPI('/gamification/leaderboard');
+    } catch {
+      return { leaderboard: [], currentUserRank: null };
+    }
+  },
+};
+
+// ──── Analytics API ────
+
+export const analyticsAPI = {
+  /**
+   * Lấy analytics overview: trends, distributions, predictions
+   * @param {number} range - 7|14|30|90 days
+   */
+  getOverview: async (range = 30) => {
+    try {
+      return await fetchAPI(`/analytics/overview?range=${range}`);
+    } catch {
+      return null;
+    }
+  },
+
+  /**
+   * Lấy concept mastery details
+   * @param {string} sort - mastery|attempts|recent
+   * @param {string} search - keyword filter
+   */
+  getConcepts: async (sort = 'mastery', search = '') => {
+    try {
+      const params = new URLSearchParams({ sort });
+      if (search) params.set('search', search);
+      return await fetchAPI(`/analytics/concepts?${params}`);
+    } catch {
+      return { total: 0, concepts: [] };
+    }
+  },
+};
+
+// ──── Notification API ────
+
+export const notificationAPI = {
+  getAll: (page = 1, limit = 20, unreadOnly = false) =>
+    fetchAPI(`/notifications?page=${page}&limit=${limit}&unreadOnly=${unreadOnly}`),
+
+  getUnreadCount: async () => {
+    try {
+      const data = await fetchAPI('/notifications/unread-count');
+      return data?.unreadCount || 0;
+    } catch { return 0; }
+  },
+
+  markRead: (id) => fetchAPI(`/notifications/${id}/read`, { method: 'PUT' }),
+
+  markAllRead: () => fetchAPI('/notifications/read-all', { method: 'PUT' }),
+
+  deleteNotification: (id) => fetchAPI(`/notifications/${id}`, { method: 'DELETE' }),
+};
+
+// ──── Library API ────
+
+export const libraryAPI = {
+  browse: (params = {}) => {
+    const q = new URLSearchParams();
+    if (params.page) q.set('page', params.page);
+    if (params.limit) q.set('limit', params.limit);
+    if (params.subject) q.set('subject', params.subject);
+    if (params.search) q.set('search', params.search);
+    if (params.sort) q.set('sort', params.sort);
+    if (params.tag) q.set('tag', params.tag);
+    return fetchAPI(`/library?${q}`);
+  },
+
+  getDetail: (id) => fetchAPI(`/library/${id}`),
+
+  publish: (documentId, data = {}) =>
+    fetchAPI('/library/publish', {
+      method: 'POST',
+      body: JSON.stringify({ documentId, ...data }),
+    }),
+
+  like: (id) => fetchAPI(`/library/${id}/like`, { method: 'POST' }),
+
+  rate: (id, score) =>
+    fetchAPI(`/library/${id}/rate`, { method: 'POST', body: JSON.stringify({ score }) }),
+
+  unpublish: (id) => fetchAPI(`/library/${id}`, { method: 'DELETE' }),
+
+  myPublished: () => fetchAPI('/library/my/published'),
+};
+
+// ──── OCR API ────
+
+export const ocrAPI = {
+  extract: async (file) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    const token = getAccessToken();
+    const res = await fetch(`${API_BASE_URL}/ocr/extract`, {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: formData,
+    });
+    if (!res.ok) throw new Error((await res.json()).error || `HTTP ${res.status}`);
+    return res.json();
+  },
+
+  uploadAsDocument: async (file, title) => {
+    const formData = new FormData();
+    formData.append('file', file);
+    if (title) formData.append('title', title);
+    const token = getAccessToken();
+    const res = await fetch(`${API_BASE_URL}/ocr/upload-as-document`, {
+      method: 'POST',
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      body: formData,
+    });
+    if (!res.ok) throw new Error((await res.json()).error || `HTTP ${res.status}`);
+    return res.json();
+  },
+};
+
+// ──── Export/Import API ────
+
+export const exportAPI = {
+  stats: () => fetchAPI('/export/stats'),
+
+  downloadFlashcards: (format = 'csv', documentId) => {
+    const q = documentId ? `?documentId=${documentId}` : '';
+    return _downloadFile(`/export/flashcards/${format}${q}`);
+  },
+
+  downloadConcepts: (documentId) => {
+    const q = documentId ? `?documentId=${documentId}` : '';
+    return _downloadFile(`/export/concepts/csv${q}`);
+  },
+
+  downloadSessions: () => _downloadFile('/export/sessions/csv'),
+
+  downloadDocumentMd: (docId) => _downloadFile(`/export/document/${docId}/markdown`),
+
+  downloadBackup: () => _downloadFile('/export/backup'),
+
+  importFlashcards: (cards, documentId) =>
+    fetchAPI('/export/import/flashcards', {
+      method: 'POST',
+      body: JSON.stringify({ cards, documentId }),
+    }),
+};
+
+async function _downloadFile(path) {
+  const token = getAccessToken();
+  const res = await fetch(`${API_BASE_URL}${path}`, {
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  });
+  if (!res.ok) throw new Error(`Download failed: ${res.status}`);
+  const blob = await res.blob();
+  const disposition = res.headers.get('Content-Disposition') || '';
+  const match = disposition.match(/filename="?([^"]+)"?/);
+  const filename = match?.[1] || 'export.dat';
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click();
+  document.body.removeChild(a);
+  URL.revokeObjectURL(url);
+  return { filename, size: blob.size };
+}

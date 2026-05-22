@@ -6,9 +6,11 @@ import {
   AlertCircle, Loader2, Plus, BookOpen, ChevronDown,
 } from 'lucide-react';
 import { documentsAPI } from '../services/api';
+import useI18nStore from '../store/useI18nStore';
 
 export default function DocumentsPage() {
   const navigate = useNavigate();
+  const t = useI18nStore(s => s.t);
   const [documents, setDocuments] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [viewMode, setViewMode] = useState('grid');
@@ -70,10 +72,10 @@ export default function DocumentsPage() {
 
   const getStatusConfig = (status) => {
     const configs = {
-      completed: { label: 'Ready', icon: CheckCircle, color: 'var(--c-success)', bg: 'var(--c-success-glow)' },
-      processing: { label: 'Processing', icon: Loader2, color: '#b45309', bg: 'var(--c-warning-glow)' },
-      pending: { label: 'Pending', icon: Clock, color: 'var(--c-text-tertiary)', bg: 'var(--c-bg-secondary)' },
-      failed: { label: 'Failed', icon: AlertCircle, color: 'var(--c-error)', bg: 'var(--c-error-glow)' },
+      completed: { label: t('documents.completed'), icon: CheckCircle, color: 'var(--c-success)', bg: 'var(--c-success-glow)' },
+      processing: { label: t('documents.processing'), icon: Loader2, color: '#b45309', bg: 'var(--c-warning-glow)' },
+      pending: { label: t('documents.pending'), icon: Clock, color: 'var(--c-text-tertiary)', bg: 'var(--c-bg-secondary)' },
+      failed: { label: t('documents.failed'), icon: AlertCircle, color: 'var(--c-error)', bg: 'var(--c-error-glow)' },
     };
     return configs[status] || configs.pending;
   };
@@ -91,15 +93,15 @@ export default function DocumentsPage() {
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 'var(--space-xl)' }}>
         <div>
           <h1 style={{ fontSize: '1.75rem', fontWeight: 700, color: 'var(--c-text-primary)', letterSpacing: '-0.03em' }}>
-            Documents
+            {t('documents.title')}
           </h1>
           <p style={{ fontSize: '0.9375rem', color: 'var(--c-text-secondary)', marginTop: 4 }}>
-            Upload and manage your learning materials
+            {t('documents.subtitle')}
           </p>
         </div>
         <button className="btn btn-primary" onClick={() => setShowUpload(true)}>
           <Plus size={16} />
-          Upload Document
+          {t('documents.upload')}
         </button>
       </div>
 
@@ -110,7 +112,7 @@ export default function DocumentsPage() {
           <Search size={16} style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)', color: 'var(--c-text-tertiary)' }} />
           <input
             className="input"
-            placeholder="Search documents..."
+            placeholder={t('documents.search')}
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
             style={{ paddingLeft: '2.25rem', height: 38, fontSize: '0.8125rem' }}
@@ -267,6 +269,7 @@ export default function DocumentsPage() {
 
 /* ═══ UPLOAD MODAL ═══ */
 function UploadModal({ onClose, onSuccess }) {
+  const t = useI18nStore(s => s.t);
   const [file, setFile] = useState(null);
   const [title, setTitle] = useState('');
   const [isUploading, setIsUploading] = useState(false);
@@ -306,7 +309,7 @@ function UploadModal({ onClose, onSuccess }) {
   return (
     <div className="animate-fade-in" style={{ position: 'fixed', inset: 0, zIndex: 100, display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'rgba(0, 0, 0, 0.3)', backdropFilter: 'blur(8px)' }} onClick={onClose}>
       <div className="animate-scale-in" style={{ width: '100%', maxWidth: 520, borderRadius: 'var(--radius-xl)', padding: 'var(--space-xl)', background: 'var(--c-bg-card)', border: '1px solid var(--c-border)', boxShadow: 'var(--shadow-xl)' }} onClick={e => e.stopPropagation()}>
-        <h2 style={{ fontSize: '1.25rem', fontWeight: 700, color: 'var(--c-text-primary)', marginBottom: 'var(--space-lg)', letterSpacing: '-0.02em' }}>Upload Document</h2>
+        <h2 style={{ fontSize: '1.25rem', fontWeight: 700, color: 'var(--c-text-primary)', marginBottom: 'var(--space-lg)', letterSpacing: '-0.02em' }}>{t('dashboard.uploadTitle')}</h2>
         <div style={{ border: `2px dashed ${dragOver ? 'var(--c-accent)' : 'var(--c-border)'}`, borderRadius: 'var(--radius-lg)', padding: 'var(--space-2xl)', textAlign: 'center', transition: 'all var(--duration-normal)', background: dragOver ? 'var(--c-accent-glow)' : 'var(--c-bg-secondary)', cursor: 'pointer', marginBottom: 'var(--space-lg)' }}
           onDragOver={e => { e.preventDefault(); setDragOver(true); }} onDragLeave={() => setDragOver(false)} onDrop={handleDrop}
           onClick={() => document.getElementById('file-input').click()}>
@@ -319,26 +322,26 @@ function UploadModal({ onClose, onSuccess }) {
             </div>
           ) : (
             <div>
-              <div style={{ fontSize: '0.9375rem', color: 'var(--c-text-secondary)' }}>Drop file here or click to browse</div>
-              <div style={{ fontSize: '0.8125rem', color: 'var(--c-text-tertiary)', marginTop: 4 }}>PDF, TXT, Markdown, DOCX — up to 50MB</div>
+              <div style={{ fontSize: '0.9375rem', color: 'var(--c-text-secondary)' }}>{t('dashboard.dropFile')}</div>
+              <div style={{ fontSize: '0.8125rem', color: 'var(--c-text-tertiary)', marginTop: 4 }}>{t('dashboard.fileFormats')}</div>
             </div>
           )}
         </div>
         <div style={{ marginBottom: 'var(--space-lg)' }}>
-          <label style={{ fontSize: '0.8125rem', fontWeight: 500, color: 'var(--c-text-secondary)', marginBottom: 6, display: 'block' }}>Title (optional)</label>
-          <input className="input" value={title} onChange={e => setTitle(e.target.value)} placeholder="Document title..." />
+          <label style={{ fontSize: '0.8125rem', fontWeight: 500, color: 'var(--c-text-secondary)', marginBottom: 6, display: 'block' }}>{t('dashboard.titleOptional')}</label>
+          <input className="input" value={title} onChange={e => setTitle(e.target.value)} placeholder={t('dashboard.titlePlaceholder')} />
         </div>
         {isUploading && (
           <div style={{ marginBottom: 'var(--space-md)' }}>
             <div className="progress-bar"><div className="progress-bar-fill" style={{ width: `${uploadProgress}%` }} /></div>
-            <div style={{ fontSize: '0.75rem', color: 'var(--c-text-tertiary)', textAlign: 'center', marginTop: 6 }}>{uploadProgress < 100 ? 'Uploading & Processing...' : 'Complete!'}</div>
+            <div style={{ fontSize: '0.75rem', color: 'var(--c-text-tertiary)', textAlign: 'center', marginTop: 6 }}>{uploadProgress < 100 ? t('dashboard.uploading') : t('dashboard.complete')}</div>
           </div>
         )}
         {error && <div style={{ padding: '0.75rem', borderRadius: 'var(--radius-md)', background: 'var(--c-error-glow)', color: 'var(--c-error)', fontSize: '0.8125rem', marginBottom: 'var(--space-md)' }}>{error}</div>}
         <div style={{ display: 'flex', gap: 'var(--space-sm)', justifyContent: 'flex-end' }}>
-          <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
+          <button className="btn btn-ghost" onClick={onClose}>{t('common.cancel')}</button>
           <button className="btn btn-primary" onClick={handleUpload} disabled={!file || isUploading} style={{ opacity: (!file || isUploading) ? 0.5 : 1 }}>
-            {isUploading ? 'Uploading...' : 'Upload & Process'}
+            {isUploading ? t('dashboard.uploading') : t('dashboard.uploadBtn')}
           </button>
         </div>
       </div>

@@ -18,6 +18,10 @@ from retrieval.hybrid_ranker import HybridRanker
 from retrieval.cross_encoder_reranker import CrossEncoderReranker
 from embedding.embedding_engine import EmbeddingEngine
 from inference.llm_engine import LLMEngine
+from preprocessing.language_detector import LanguageDetector
+
+# Shared query language detector instance
+_query_lang_detector = LanguageDetector()
 
 
 SYSTEM_PROMPT_EN = """You are NeuroVault AI — an intelligent learning assistant.
@@ -28,7 +32,7 @@ Rules:
 3. Cite specific passages when possible using [Source: chunk_id].
 4. Keep answers clear, educational, and well-structured.
 5. Use bullet points and headings for long answers.
-6. Support both English and Vietnamese."""
+6. IMPORTANT: You MUST answer in English because the user asked in English."""
 
 SYSTEM_PROMPT_VI = """Bạn là NeuroVault AI — trợ lý học tập thông minh.
 Bạn trả lời câu hỏi DỰA TRÊN NỘI DUNG tài liệu được cung cấp.
@@ -38,7 +42,29 @@ Quy tắc:
 3. Trích dẫn đoạn văn cụ thể khi có thể [Nguồn: chunk_id].
 4. Trả lời rõ ràng, mang tính giáo dục, có cấu trúc.
 5. Sử dụng bullet points và heading cho câu trả lời dài.
-6. Hỗ trợ cả tiếng Anh và tiếng Việt."""
+6. QUAN TRỌNG: Bạn PHẢI trả lời bằng TIẾNG VIỆT vì người dùng hỏi bằng tiếng Việt."""
+
+USER_PROMPT_EN = """Context from document:
+{context}
+
+---
+
+Question: {query}
+
+Please provide a comprehensive, educational answer based on the context above.
+Cite sources using [Source: chunk_id] when referencing specific passages.
+You MUST answer in English."""
+
+USER_PROMPT_VI = """Ngữ cảnh từ tài liệu:
+{context}
+
+---
+
+Câu hỏi: {query}
+
+Hãy trả lời đầy đủ, mang tính giáo dục dựa trên ngữ cảnh ở trên.
+Trích dẫn nguồn bằng [Nguồn: chunk_id] khi đề cập đến các đoạn cụ thể.
+Bạn PHẢI trả lời bằng TIẾNG VIỆT."""
 
 
 class RAGPipeline:
@@ -159,6 +185,23 @@ class RAGPipeline:
 
         return fused[:top_k]
 
+    def detect_query_language(self, query: str) -> str:
+        """
+        Detect the language of the user's query.
+        Returns 'vi' or 'en'.
+        Falls back to document language if query is too short or ambiguous.
+        """
+        query_lang = _query_lang_detector.detect(query)
+        if query_lang in ('vi', 'en'):
+            return query_lang
+        # Fallback: if query is short, check for Vietnamese chars
+        vi_chars = set('àáảãạăắằẳẵặâấầẩẫậèéẻẽẹêếềểễệìíỉĩịòóỏõọôốồổỗộơớờởỡợùúủũụưứừửữựỳýỷỹỵđ'
+                       'ÀÁẢÃẠĂẮẰẲẴẶÂẤẦẨẪẬÈÉẺẼẸÊẾỀỂỄỆÌÍỈĨỊÒÓỎÕỌÔỐỒỔỖỘƠỚỜỞỠỢÙÚỦŨỤƯỨỪỬỮỰỲÝỶỸỴĐ')
+        if any(c in vi_chars for c in query):
+            return 'vi'
+        # Fallback to document language
+        return self.language
+
     def generate_answer(
         self,
         query: str,
@@ -169,6 +212,7 @@ class RAGPipeline:
     ) -> Dict:
         """
         Full RAG: Retrieve → Augment → Generate.
+        Detects query language and responds in the same language.
 
         Returns:
             {
@@ -178,13 +222,16 @@ class RAGPipeline:
                 "thinking": str (if use_thinking=True)
             }
         """
+        # Detect query language — respond in the same language as the question
+        query_lang = self.detect_query_language(query)
+
         # Step 1: Retrieve
         retrieved = self.retrieve(query, top_k=top_k)
 
         if not retrieved:
             no_info = (
                 "Tôi không tìm thấy thông tin liên quan trong tài liệu cho câu hỏi này."
-                if self.language == "vi"
+                if query_lang == "vi"
                 else "I couldn't find relevant information in the document for this question."
             )
             return {
@@ -201,18 +248,13 @@ class RAGPipeline:
             )
         context = "\n\n---\n\n".join(context_parts)
 
-        # Step 3: Build prompt
-        system = SYSTEM_PROMPT_VI if self.language == "vi" else SYSTEM_PROMPT_EN
-
-        user_prompt = f"""Context from document:
-{context}
-
----
-
-Question: {query}
-
-Please provide a comprehensive, educational answer based on the context above.
-Cite sources using [Source: chunk_id] when referencing specific passages."""
+        # Step 3: Build prompt — match the query language
+        if query_lang == "vi":
+            system = SYSTEM_PROMPT_VI
+            user_prompt = USER_PROMPT_VI.format(context=context, query=query)
+        else:
+            system = SYSTEM_PROMPT_EN
+            user_prompt = USER_PROMPT_EN.format(context=context, query=query)
 
         # Step 4: Build messages with conversation memory
         messages = [{"role": "system", "content": system}]

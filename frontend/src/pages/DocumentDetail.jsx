@@ -4,9 +4,10 @@ import {
   MessageSquare, FileText, Sparkles, Layers,
   HelpCircle, ArrowLeft, Loader2, Network, Brain,
   BookOpen, StickyNote, PanelRightOpen, PanelRightClose,
-  Eye, ChevronRight,
+  Eye, ChevronRight, Share2, CheckCircle, Globe,
 } from 'lucide-react';
-import { documentsAPI, aiAPI, annotationsAPI } from '../services/api';
+import { documentsAPI, aiAPI, annotationsAPI, libraryAPI } from '../services/api';
+import useI18nStore from '../store/useI18nStore';
 import ChatBox from '../components/chat/ChatBox';
 import QuizView from '../components/quiz/QuizView';
 import FlashcardView from '../components/flashcard/FlashcardView';
@@ -27,6 +28,7 @@ const tabs = [
 export default function DocumentDetail() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const t = useI18nStore(s => s.t);
   const [searchParams] = useSearchParams();
   const initialTab = searchParams.get('tab') || 'viewer';
   const [activeTab, setActiveTab] = useState(initialTab);
@@ -43,6 +45,10 @@ export default function DocumentDetail() {
 
   // Side chat state (song song với viewer)
   const [showSideChat, setShowSideChat] = useState(false);
+
+  // Publish to library state
+  const [showPublishModal, setShowPublishModal] = useState(false);
+  const [isPublished, setIsPublished] = useState(false);
 
   // ──── Data Loading ────
   useEffect(() => { loadDocument(); loadAnnotations(); }, [id]);
@@ -288,6 +294,24 @@ export default function DocumentDetail() {
               <span style={{ fontSize: '0.75rem' }}>Chat</span>
             </button>
           )}
+          {/* Share to Library button */}
+          {document?.metadata?.processing_status === 'completed' && (
+            <button
+              className="btn btn-ghost btn-sm"
+              onClick={() => isPublished ? null : setShowPublishModal(true)}
+              title={isPublished ? t('library.alreadyPublished') : t('library.publish')}
+              style={{
+                color: isPublished ? 'var(--c-success)' : 'var(--c-text-tertiary)',
+                background: isPublished ? 'var(--c-success-glow)' : 'transparent',
+                cursor: isPublished ? 'default' : 'pointer',
+              }}
+            >
+              {isPublished ? <CheckCircle size={14} /> : <Share2 size={14} />}
+              <span style={{ fontSize: '0.75rem' }}>
+                {isPublished ? t('library.published') : t('library.publish')}
+              </span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -377,6 +401,174 @@ export default function DocumentDetail() {
             )}
           </div>
         )}
+      </div>
+
+      {/* Publish Modal */}
+      {showPublishModal && (
+        <PublishModal
+          documentId={id}
+          documentTitle={document?.title}
+          onClose={() => setShowPublishModal(false)}
+          onSuccess={() => { setShowPublishModal(false); setIsPublished(true); }}
+          t={t}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ═══ PUBLISH TO LIBRARY MODAL ═══ */
+const SUBJECTS = [
+  { value: 'cs', label: 'Computer Science', icon: '💻' },
+  { value: 'math', label: 'Math', icon: '📐' },
+  { value: 'science', label: 'Science', icon: '🔬' },
+  { value: 'language', label: 'Language', icon: '🌐' },
+  { value: 'history', label: 'History', icon: '📜' },
+  { value: 'business', label: 'Business', icon: '💼' },
+  { value: 'art', label: 'Art', icon: '🎨' },
+  { value: 'other', label: 'Other', icon: '📁' },
+];
+
+function PublishModal({ documentId, documentTitle, onClose, onSuccess, t }) {
+  const [subject, setSubject] = useState('other');
+  const [description, setDescription] = useState('');
+  const [tagsInput, setTagsInput] = useState('');
+  const [isPublishing, setIsPublishing] = useState(false);
+  const [error, setError] = useState('');
+
+  const handlePublish = async () => {
+    setIsPublishing(true);
+    setError('');
+    try {
+      const tags = tagsInput.split(',').map(t => t.trim()).filter(Boolean);
+      await libraryAPI.publish(documentId, { description, subject, tags });
+      onSuccess();
+    } catch (err) {
+      if (err.message?.includes('already published')) {
+        setError(t('library.alreadyPublished'));
+      } else {
+        setError(err.message || 'Failed to publish');
+      }
+    } finally {
+      setIsPublishing(false);
+    }
+  };
+
+  return (
+    <div className="animate-fade-in" style={{
+      position: 'fixed', inset: 0, zIndex: 100, display: 'flex',
+      alignItems: 'center', justifyContent: 'center',
+      background: 'rgba(0, 0, 0, 0.3)', backdropFilter: 'blur(8px)',
+    }} onClick={onClose}>
+      <div className="animate-scale-in" style={{
+        width: '100%', maxWidth: 480, borderRadius: 'var(--radius-xl)',
+        padding: 'var(--space-xl)', background: 'var(--c-bg-card)',
+        border: '1px solid var(--c-border)', boxShadow: 'var(--shadow-xl)',
+      }} onClick={e => e.stopPropagation()}>
+        {/* Header */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-sm)', marginBottom: 'var(--space-lg)' }}>
+          <div style={{
+            width: 36, height: 36, borderRadius: 'var(--radius-md)',
+            background: 'var(--c-accent-glow)', display: 'flex',
+            alignItems: 'center', justifyContent: 'center',
+          }}>
+            <Globe size={18} style={{ color: 'var(--c-accent)' }} />
+          </div>
+          <div>
+            <h2 style={{ fontSize: '1.125rem', fontWeight: 700, color: 'var(--c-text-primary)', letterSpacing: '-0.02em' }}>
+              {t('library.publishTitle')}
+            </h2>
+            <p style={{ fontSize: '0.75rem', color: 'var(--c-text-tertiary)', marginTop: 2 }}>
+              {t('library.publishDesc')}
+            </p>
+          </div>
+        </div>
+
+        {/* Document name */}
+        <div style={{
+          padding: '0.75rem', borderRadius: 'var(--radius-md)',
+          background: 'var(--c-bg-secondary)', marginBottom: 'var(--space-md)',
+          display: 'flex', alignItems: 'center', gap: 8,
+        }}>
+          <FileText size={14} style={{ color: 'var(--c-accent)', flexShrink: 0 }} />
+          <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--c-text-primary)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+            {documentTitle}
+          </span>
+        </div>
+
+        {/* Subject */}
+        <div style={{ marginBottom: 'var(--space-md)' }}>
+          <label style={{ fontSize: '0.8125rem', fontWeight: 500, color: 'var(--c-text-secondary)', marginBottom: 6, display: 'block' }}>
+            {t('library.subject')}
+          </label>
+          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+            {SUBJECTS.map(s => (
+              <button key={s.value} onClick={() => setSubject(s.value)} style={{
+                padding: '5px 10px', borderRadius: 'var(--radius-full)',
+                border: '1px solid', cursor: 'pointer', fontSize: '0.6875rem', fontWeight: 600,
+                display: 'flex', alignItems: 'center', gap: 3, transition: 'all 0.2s',
+                background: subject === s.value ? 'var(--c-accent-glow)' : 'transparent',
+                borderColor: subject === s.value ? 'rgba(99,102,241,0.3)' : 'var(--c-border)',
+                color: subject === s.value ? 'var(--c-accent)' : 'var(--c-text-tertiary)',
+              }}>
+                <span>{s.icon}</span> {s.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Description */}
+        <div style={{ marginBottom: 'var(--space-md)' }}>
+          <label style={{ fontSize: '0.8125rem', fontWeight: 500, color: 'var(--c-text-secondary)', marginBottom: 6, display: 'block' }}>
+            {t('library.description')}
+          </label>
+          <textarea
+            className="input"
+            value={description}
+            onChange={e => setDescription(e.target.value)}
+            placeholder={t('library.descPlaceholder')}
+            rows={3}
+            style={{ resize: 'vertical', fontSize: '0.8125rem' }}
+          />
+        </div>
+
+        {/* Tags */}
+        <div style={{ marginBottom: 'var(--space-lg)' }}>
+          <label style={{ fontSize: '0.8125rem', fontWeight: 500, color: 'var(--c-text-secondary)', marginBottom: 6, display: 'block' }}>
+            {t('library.tags')}
+          </label>
+          <input
+            className="input"
+            value={tagsInput}
+            onChange={e => setTagsInput(e.target.value)}
+            placeholder={t('library.tagsPlaceholder')}
+            style={{ fontSize: '0.8125rem' }}
+          />
+        </div>
+
+        {/* Error */}
+        {error && (
+          <div style={{ padding: '0.75rem', borderRadius: 'var(--radius-md)', background: 'var(--c-error-glow)', color: 'var(--c-error)', fontSize: '0.8125rem', marginBottom: 'var(--space-md)' }}>
+            {error}
+          </div>
+        )}
+
+        {/* Actions */}
+        <div style={{ display: 'flex', gap: 'var(--space-sm)', justifyContent: 'flex-end' }}>
+          <button className="btn btn-ghost" onClick={onClose}>{t('common.cancel')}</button>
+          <button
+            className="btn btn-primary"
+            onClick={handlePublish}
+            disabled={isPublishing}
+            style={{ opacity: isPublishing ? 0.7 : 1, gap: 6 }}
+          >
+            {isPublishing ? (
+              <><Loader2 size={14} style={{ animation: 'rotate-slow 1s linear infinite' }} /> {t('library.publishing')}</>
+            ) : (
+              <><Share2 size={14} /> {t('library.publishBtn')}</>
+            )}
+          </button>
+        </div>
       </div>
     </div>
   );

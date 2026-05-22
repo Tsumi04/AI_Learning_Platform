@@ -4,18 +4,19 @@ import jwt from 'jsonwebtoken';
 import { register, login, refreshToken, getMe, logout, updateProfile, changePassword } from '../controllers/auth.controller.js';
 import auth from '../middleware/auth.js';
 import { authLimiter } from '../middleware/rateLimiter.js';
+import { auditMiddleware } from '../middleware/security.js';
 import config from '../config/env.js';
 
 const router = Router();
 
-// ── Local Auth ──
-router.post('/register', authLimiter, register);
-router.post('/login', authLimiter, login);
+// ── Local Auth (with audit logging for sensitive ops) ──
+router.post('/register', authLimiter, auditMiddleware('AUTH_REGISTER'), register);
+router.post('/login', authLimiter, auditMiddleware('AUTH_LOGIN'), login);
 router.post('/refresh', refreshToken);
 router.get('/me', auth, getMe);
 router.put('/profile', auth, updateProfile);
-router.put('/password', auth, changePassword);
-router.post('/logout', auth, logout);
+router.put('/password', auth, auditMiddleware('AUTH_PASSWORD_CHANGE'), changePassword);
+router.post('/logout', auth, auditMiddleware('AUTH_LOGOUT'), logout);
 
 // ── Google OAuth ──
 

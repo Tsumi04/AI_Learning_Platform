@@ -6,8 +6,9 @@ import {
   Target, Flame, Activity, BarChart3, Network,
   Layers, MessageSquare,
 } from 'lucide-react';
-import { documentsAPI, healthAPI, aiAPI, learningAPI } from '../services/api';
+import { documentsAPI, healthAPI, aiAPI, learningAPI, gamificationAPI } from '../services/api';
 import useAuthStore from '../store/useAuthStore';
+import useI18nStore from '../store/useI18nStore';
 
 // ── Dashboard v2 Components ──
 import StreakCard from '../components/dashboard/StreakCard';
@@ -17,14 +18,20 @@ import MasteryDonut from '../components/dashboard/MasteryDonut';
 import StatsGrid from '../components/dashboard/StatsGrid';
 import RecentActivity from '../components/dashboard/RecentActivity';
 
+// ── Gamification Components ──
+import XPBar from '../components/gamification/XPBar';
+import DailyChallenge from '../components/gamification/DailyChallenge';
+
 export default function Dashboard() {
   const { user } = useAuthStore();
+  const t = useI18nStore(s => s.t);
   const navigate = useNavigate();
   const [documents, setDocuments] = useState([]);
   const [isLoading, setIsLoading] = useState(true);
   const [showUpload, setShowUpload] = useState(false);
   const [aiStats, setAiStats] = useState(null);
   const [dashboardData, setDashboardData] = useState(null);
+  const [gamProfile, setGamProfile] = useState(null);
   const [systemStatus, setSystemStatus] = useState({
     gateway: 'checking',
     aiCore: 'checking',
@@ -36,6 +43,7 @@ export default function Dashboard() {
     checkSystemHealth();
     loadAIStats();
     loadDashboardData();
+    loadGamification();
     const interval = setInterval(checkSystemHealth, 30000);
     return () => clearInterval(interval);
   }, []);
@@ -60,6 +68,11 @@ export default function Dashboard() {
     setDashboardData(data);
   };
 
+  const loadGamification = async () => {
+    const data = await gamificationAPI.getProfile();
+    setGamProfile(data);
+  };
+
   const loadDocuments = async () => {
     try {
       setIsLoading(true);
@@ -75,9 +88,9 @@ export default function Dashboard() {
 
   const getGreeting = () => {
     const hour = new Date().getHours();
-    if (hour < 12) return 'Good morning';
-    if (hour < 18) return 'Good afternoon';
-    return 'Good evening';
+    if (hour < 12) return t('dashboard.goodMorning');
+    if (hour < 18) return t('dashboard.goodAfternoon');
+    return t('dashboard.goodEvening');
   };
 
   const formatDate = (dateStr) => {
@@ -132,8 +145,13 @@ export default function Dashboard() {
           {getGreeting()}, <span className="text-gradient">{user?.name || 'there'}</span>
         </h1>
         <p style={{ fontSize: '0.9375rem', color: 'var(--c-text-secondary)' }}>
-          Your AI-powered learning journey continues. Let's make progress today.
+          {t('dashboard.greeting')}
         </p>
+      </div>
+
+      {/* ═══ XP BAR — Gamification ═══ */}
+      <div style={{ marginBottom: 'var(--space-lg)' }} className="animate-fade-in-up">
+        <XPBar profile={gamProfile} />
       </div>
 
       {/* ═══ STATS GRID — 6 MINI CARDS ═══ */}
@@ -188,11 +206,11 @@ export default function Dashboard() {
               fontSize: '1.125rem', fontWeight: 600,
               color: 'var(--c-text-primary)', letterSpacing: '-0.01em',
             }}>
-              Recent Documents
+              {t('dashboard.recentDocs')}
             </h2>
             <button className="btn btn-primary btn-sm" onClick={() => setShowUpload(true)}>
               <Plus size={14} />
-              Upload
+              {t('dashboard.upload')}
             </button>
           </div>
 
@@ -218,18 +236,18 @@ export default function Dashboard() {
               </div>
               <div>
                 <h3 style={{ fontSize: '1.25rem', fontWeight: 600, color: 'var(--c-text-primary)', marginBottom: 8 }}>
-                  Start your learning journey
+                  {t('dashboard.startJourney')}
                 </h3>
                 <p style={{
                   fontSize: '0.9375rem', color: 'var(--c-text-secondary)',
                   maxWidth: 400, margin: '0 auto', lineHeight: 1.6,
                 }}>
-                  Upload a document and our AI will analyze it, extract key concepts, and create a personalized learning path for you.
+                  {t('dashboard.startJourneyDesc')}
                 </p>
               </div>
               <button className="btn btn-primary btn-lg" onClick={() => setShowUpload(true)}>
                 <Upload size={18} />
-                Upload Your First Document
+                {t('dashboard.uploadFirst')}
               </button>
             </div>
           ) : (
@@ -281,7 +299,7 @@ export default function Dashboard() {
                 }}
                 onMouseEnter={e => { e.currentTarget.style.background = 'var(--c-accent-glow)'; }}
                 onMouseLeave={e => { e.currentTarget.style.background = 'transparent'; }}>
-                  View All Documents →
+                  {t('dashboard.viewAllDocs')}
                 </Link>
               )}
             </div>
@@ -295,6 +313,11 @@ export default function Dashboard() {
             <RecentActivity recentActivity={dashboardData?.recentActivity || []} />
           </div>
 
+          {/* Daily Challenge */}
+          <div className="animate-fade-in-up stagger-3">
+            <DailyChallenge challenge={gamProfile?.dailyChallenge} />
+          </div>
+
           {/* AI Features Card */}
           <div className="bento-card animate-fade-in-up stagger-3" style={{
             padding: 'var(--space-lg)',
@@ -304,14 +327,14 @@ export default function Dashboard() {
             <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-sm)', marginBottom: 'var(--space-lg)' }}>
               <Sparkles size={16} style={{ color: 'var(--c-accent)' }} />
               <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--c-accent)' }}>
-                AI CAPABILITIES
+                {t('dashboard.aiCapabilities')}
               </span>
             </div>
             {[
-              { icon: MessageSquare, label: 'Smart Chat', desc: 'Ask questions about your docs', path: '/ai-studio' },
-              { icon: Target, label: 'Auto Quiz', desc: 'AI-generated assessments', path: '/ai-studio' },
-              { icon: Layers, label: 'Flashcards', desc: 'Spaced repetition learning', path: '/ai-studio' },
-              { icon: Network, label: 'Knowledge Graph', desc: 'Visual concept mapping', path: '/ai-studio' },
+              { icon: MessageSquare, label: t('dashboard.smartChat'), desc: t('dashboard.smartChatDesc'), path: '/ai-studio' },
+              { icon: Target, label: t('dashboard.autoQuiz'), desc: t('dashboard.autoQuizDesc'), path: '/ai-studio' },
+              { icon: Layers, label: t('dashboard.flashcards'), desc: t('dashboard.flashcardsDesc'), path: '/ai-studio' },
+              { icon: Network, label: t('dashboard.knowledgeGraph'), desc: t('dashboard.knowledgeGraphDesc'), path: '/ai-studio' },
             ].map((feat, i) => (
               <div key={feat.label}
                 onClick={() => navigate(feat.path)}
@@ -344,15 +367,15 @@ export default function Dashboard() {
               <div style={{ display: 'flex', alignItems: 'center', gap: 'var(--space-sm)', marginBottom: 'var(--space-md)' }}>
                 <Activity size={14} style={{ color: 'var(--c-accent)' }} />
                 <span style={{ fontSize: '0.8125rem', fontWeight: 600, color: 'var(--c-text-primary)' }}>
-                  AI Engine
+                  {t('dashboard.aiEngine')}
                 </span>
               </div>
               <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 'var(--space-sm)' }}>
                 {[
-                  { label: 'Model', value: aiStats.llm_model || 'N/A' },
-                  { label: 'Status', value: aiStats.llm_available ? '● Online' : '○ Offline' },
-                  { label: 'Indexed', value: `${aiStats.total_documents || 0} docs` },
-                  { label: 'Chunks', value: aiStats.total_chunks || 0 },
+                  { label: t('dashboard.model'), value: aiStats.llm_model || 'N/A' },
+                  { label: t('dashboard.status'), value: aiStats.llm_available ? `● ${t('dashboard.online')}` : `○ ${t('dashboard.offline')}` },
+                  { label: t('dashboard.indexed'), value: `${aiStats.total_documents || 0} docs` },
+                  { label: t('dashboard.chunks'), value: aiStats.total_chunks || 0 },
                 ].map(item => (
                   <div key={item.label} style={{ padding: '0.5rem', borderRadius: 'var(--radius-sm)', background: 'var(--c-bg-secondary)' }}>
                     <div style={{ fontSize: '0.6875rem', color: 'var(--c-text-tertiary)', fontWeight: 500 }}>{item.label}</div>
@@ -369,7 +392,7 @@ export default function Dashboard() {
               fontSize: '0.8125rem', fontWeight: 600,
               color: 'var(--c-text-primary)', marginBottom: 'var(--space-md)',
             }}>
-              System Status
+              {t('dashboard.systemStatus')}
             </div>
             {[
               { label: 'API Gateway', status: systemStatus.gateway },
@@ -418,6 +441,7 @@ export default function Dashboard() {
 
 /* ═══ UPLOAD MODAL ═══ */
 function UploadModal({ onClose, onSuccess }) {
+  const t = useI18nStore(s => s.t);
   const [file, setFile] = useState(null);
   const [title, setTitle] = useState('');
   const [isUploading, setIsUploading] = useState(false);
@@ -464,7 +488,7 @@ function UploadModal({ onClose, onSuccess }) {
         border: '1px solid var(--c-border)', boxShadow: 'var(--shadow-xl)',
       }} onClick={e => e.stopPropagation()}>
         <h2 style={{ fontSize: '1.25rem', fontWeight: 700, color: 'var(--c-text-primary)', marginBottom: 'var(--space-lg)', letterSpacing: '-0.02em' }}>
-          Upload Document
+          {t('dashboard.uploadTitle')}
         </h2>
 
         <div style={{
@@ -486,22 +510,22 @@ function UploadModal({ onClose, onSuccess }) {
             </div>
           ) : (
             <div>
-              <div style={{ fontSize: '0.9375rem', color: 'var(--c-text-secondary)' }}>Drop file here or click to browse</div>
-              <div style={{ fontSize: '0.8125rem', color: 'var(--c-text-tertiary)', marginTop: 4 }}>PDF, TXT, Markdown, DOCX — up to 50MB</div>
+              <div style={{ fontSize: '0.9375rem', color: 'var(--c-text-secondary)' }}>{t('dashboard.dropFile')}</div>
+              <div style={{ fontSize: '0.8125rem', color: 'var(--c-text-tertiary)', marginTop: 4 }}>{t('dashboard.fileFormats')}</div>
             </div>
           )}
         </div>
 
         <div style={{ marginBottom: 'var(--space-lg)' }}>
-          <label style={{ fontSize: '0.8125rem', fontWeight: 500, color: 'var(--c-text-secondary)', marginBottom: 6, display: 'block' }}>Title (optional)</label>
-          <input className="input" value={title} onChange={e => setTitle(e.target.value)} placeholder="Document title..." />
+          <label style={{ fontSize: '0.8125rem', fontWeight: 500, color: 'var(--c-text-secondary)', marginBottom: 6, display: 'block' }}>{t('dashboard.titleOptional')}</label>
+          <input className="input" value={title} onChange={e => setTitle(e.target.value)} placeholder={t('dashboard.titlePlaceholder')} />
         </div>
 
         {isUploading && (
           <div style={{ marginBottom: 'var(--space-md)' }}>
             <div className="progress-bar"><div className="progress-bar-fill" style={{ width: `${progress}%` }} /></div>
             <div style={{ fontSize: '0.75rem', color: 'var(--c-text-tertiary)', textAlign: 'center', marginTop: 6 }}>
-              {progress < 100 ? 'Uploading & Processing...' : 'Complete!'}
+              {progress < 100 ? t('dashboard.uploading') : t('dashboard.complete')}
             </div>
           </div>
         )}
@@ -513,10 +537,10 @@ function UploadModal({ onClose, onSuccess }) {
         )}
 
         <div style={{ display: 'flex', gap: 'var(--space-sm)', justifyContent: 'flex-end' }}>
-          <button className="btn btn-ghost" onClick={onClose}>Cancel</button>
+          <button className="btn btn-ghost" onClick={onClose}>{t('common.cancel')}</button>
           <button className="btn btn-primary" onClick={handleUpload} disabled={!file || isUploading}
             style={{ opacity: (!file || isUploading) ? 0.5 : 1 }}>
-            {isUploading ? 'Uploading...' : 'Upload & Process'}
+            {isUploading ? t('dashboard.uploading') : t('dashboard.uploadBtn')}
           </button>
         </div>
       </div>

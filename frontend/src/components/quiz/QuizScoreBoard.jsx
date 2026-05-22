@@ -83,10 +83,16 @@ export default function QuizScoreBoard({
   const BLOOM_LABELS = {
     remember: 'Remember', understand: 'Understand', apply: 'Apply',
     analyze: 'Analyze', evaluate: 'Evaluate', create: 'Create',
+    // Vietnamese Bloom names from backend
+    'Nhớ': 'Nhớ', 'Hiểu': 'Hiểu', 'Áp dụng': 'Áp dụng',
+    'Phân tích': 'Phân tích', 'Đánh giá': 'Đánh giá', 'Sáng tạo': 'Sáng tạo',
   };
   const BLOOM_COLORS = {
     remember: '#94a3b8', understand: '#6366f1', apply: '#8b5cf6',
     analyze: '#3b82f6', evaluate: '#f59e0b', create: '#34d399',
+    // Vietnamese
+    'Nhớ': '#94a3b8', 'Hiểu': '#6366f1', 'Áp dụng': '#8b5cf6',
+    'Phân tích': '#3b82f6', 'Đánh giá': '#f59e0b', 'Sáng tạo': '#34d399',
   };
 
   return (

@@ -27,14 +27,20 @@ const fileFilter = (req, file, cb) => {
     'text/plain',
     'text/markdown',
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document', // .docx
+    // Image types for OCR
+    'image/jpeg',
+    'image/png',
+    'image/tiff',
+    'image/bmp',
+    'image/webp',
   ];
-  const allowedExtensions = ['.pdf', '.txt', '.md', '.docx'];
+  const allowedExtensions = ['.pdf', '.txt', '.md', '.docx', '.jpg', '.jpeg', '.png', '.tiff', '.tif', '.bmp', '.webp'];
   const ext = path.extname(file.originalname).toLowerCase();
 
   if (allowedTypes.includes(file.mimetype) || allowedExtensions.includes(ext)) {
     cb(null, true);
   } else {
-    cb(new Error(`File type not allowed: ${file.mimetype}. Accepted: PDF, TXT, MD, DOCX`), false);
+    cb(new Error(`File type not allowed: ${file.mimetype}. Accepted: PDF, TXT, MD, DOCX, JPG, PNG, TIFF, BMP, WebP`), false);
   }
 };
 

@@ -6,13 +6,17 @@
  * Props:
  *   onMenuToggle — callback mở/đóng sidebar overlay.
  */
-import { Bell, Search, Menu } from 'lucide-react';
+import { Search, Menu } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import useAuthStore from '../../store/useAuthStore';
+import useI18nStore from '../../store/useI18nStore';
 import ThemeToggle from './ThemeToggle';
+import LanguageSwitcher from './LanguageSwitcher';
+import NotificationDropdown from '../notifications/NotificationDropdown';
 
 export default function Header({ onMenuToggle }) {
   const { user } = useAuthStore();
+  const t = useI18nStore(s => s.t);
 
   return (
     <header className="app-header">
@@ -32,7 +36,7 @@ export default function Header({ onMenuToggle }) {
           <Search size={16} className="header-search-icon" />
           <input
             type="text"
-            placeholder="Search documents, concepts..."
+            placeholder={t('header.search')}
             className="input input-with-icon"
             id="header-search-input"
           />
@@ -44,11 +48,11 @@ export default function Header({ onMenuToggle }) {
         {/* Theme Toggle */}
         <ThemeToggle />
 
-        {/* Notification Bell */}
-        <button className="header-icon-btn" aria-label="Notifications">
-          <Bell size={16} strokeWidth={1.5} />
-          <div className="header-notif-dot" />
-        </button>
+        {/* Language Switcher */}
+        <LanguageSwitcher />
+
+        {/* Notification Dropdown */}
+        <NotificationDropdown />
 
         {/* User Avatar */}
         <Link to="/profile" className="header-user-link">
@@ -60,7 +64,7 @@ export default function Header({ onMenuToggle }) {
               {user?.name || 'User'}
             </span>
             <span className="header-user-role">
-              Pro Member
+              {t('header.proMember')}
             </span>
           </div>
         </Link>

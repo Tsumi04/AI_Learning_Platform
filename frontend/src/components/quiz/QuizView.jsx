@@ -32,11 +32,17 @@ const DIFFICULTY_OPTIONS = [
 const BLOOM_LABELS = {
   remember: 'Remember', understand: 'Understand', apply: 'Apply',
   analyze: 'Analyze', evaluate: 'Evaluate', create: 'Create',
+  // Vietnamese Bloom names from backend
+  'Nhớ': 'Nhớ', 'Hiểu': 'Hiểu', 'Áp dụng': 'Áp dụng',
+  'Phân tích': 'Phân tích', 'Đánh giá': 'Đánh giá', 'Sáng tạo': 'Sáng tạo',
 };
 
 const BLOOM_COLORS = {
   remember: '#94a3b8', understand: '#6366f1', apply: '#8b5cf6',
   analyze: '#3b82f6', evaluate: '#f59e0b', create: '#34d399',
+  // Vietnamese
+  'Nhớ': '#94a3b8', 'Hiểu': '#6366f1', 'Áp dụng': '#8b5cf6',
+  'Phân tích': '#3b82f6', 'Đánh giá': '#f59e0b', 'Sáng tạo': '#34d399',
 };
 
 export default function QuizView({ documentId }) {
@@ -71,7 +77,9 @@ export default function QuizView({ documentId }) {
       const opts = [q.correct_answer, ...(q.distractors || [])];
       setShuffledOptions(shuffleArray(opts));
     } else if (q.question_type === 'true_false') {
-      setShuffledOptions(['True', 'False']);
+      // Detect language from correct_answer — backend returns 'Đúng'/'Sai' for Vietnamese
+      const isVi = q.correct_answer === 'Đúng' || q.correct_answer === 'Sai';
+      setShuffledOptions(isVi ? ['Đúng', 'Sai'] : ['True', 'False']);
     } else {
       setShuffledOptions([]);
     }
@@ -459,10 +467,10 @@ export default function QuizView({ documentId }) {
           </div>
         )}
 
-        {/* ── True/False Options ── */}
         {q.question_type === 'true_false' && (
           <div style={{ display: 'flex', gap: 'var(--space-md)' }}>
-            {['True', 'False'].map(opt => {
+            {shuffledOptions.map(opt => {
+              const isTrueOption = opt === 'True' || opt === 'Đúng';
               const isCorrect = opt === q.correct_answer;
               const isSelected = selectedAnswer === opt;
               let borderColor = 'var(--c-border)';
@@ -486,10 +494,10 @@ export default function QuizView({ documentId }) {
                 >
                   <div style={{
                     width: 44, height: 44, borderRadius: '50%',
-                    background: opt === 'True' ? 'rgba(52,211,153,0.1)' : 'rgba(248,113,113,0.1)',
+                    background: isTrueOption ? 'rgba(52,211,153,0.1)' : 'rgba(248,113,113,0.1)',
                     display: 'flex', alignItems: 'center', justifyContent: 'center',
                   }}>
-                    {opt === 'True'
+                    {isTrueOption
                       ? <CheckCircle size={22} style={{ color: '#34d399' }} />
                       : <XCircle size={22} style={{ color: '#f87171' }} />}
                   </div>

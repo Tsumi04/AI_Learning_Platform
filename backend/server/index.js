@@ -1,12 +1,16 @@
 import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
+import compression from 'compression';
+import hpp from 'hpp';
 import passport from 'passport';
 import connectDB, { disconnectDB, getDBStatus } from './config/db.js';
 import config, { validateConfig, printConfigSummary } from './config/env.js';
 import setupGoogleAuth from './config/passport.js';
-import { generalLimiter } from './middleware/rateLimiter.js';
+import { generalLimiter, aiLimiter } from './middleware/rateLimiter.js';
+import { sanitizeInput, sanitizeXSS } from './middleware/security.js';
 import errorHandler from './middleware/errorHandler.js';
+import { setupCollaborationWS, getCollabStats } from './collaboration.js';
 
 // Routes
 import authRoutes from './routes/auth.routes.js';
@@ -14,6 +18,16 @@ import documentRoutes from './routes/document.routes.js';
 import aiRoutes from './routes/ai.routes.js';
 import learningRoutes from './routes/learning.routes.js';
 import annotationRoutes from './routes/annotation.routes.js';
+import gamificationRoutes from './routes/gamification.routes.js';
+import analyticsRoutes from './routes/analytics.routes.js';
+import collabRoutes from './routes/collab.routes.js';
+import notificationRoutes from './routes/notification.routes.js';
+import libraryRoutes from './routes/library.routes.js';
+import ocrRoutes from './routes/ocr.routes.js';
+import exportRoutes from './routes/export.routes.js';
+import instructorRoutes from './routes/instructor.routes.js';
+import monitorRoutes from './routes/monitor.routes.js';
+import { metricsMiddleware } from './services/metrics.service.js';
 
 const app = express();
 
@@ -40,12 +54,34 @@ app.use((req, res, next) => {
 });
 
 // ──────────────────────────────────────────────
+// Metrics Collection — track all requests
+// ──────────────────────────────────────────────
+app.use(metricsMiddleware);
+
+// ──────────────────────────────────────────────
 // Security
 // ──────────────────────────────────────────────
 app.use(helmet({
-  // Cho phép Content-Security-Policy linh hoạt hơn cho development
-  contentSecurityPolicy: config.isDev ? false : undefined,
-  crossOriginEmbedderPolicy: false, // Cho phép load ảnh từ Google OAuth avatar
+  contentSecurityPolicy: config.isDev ? false : {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
+      fontSrc: ["'self'", 'https://fonts.gstatic.com'],
+      imgSrc: ["'self'", 'data:', 'blob:', 'https://*.googleusercontent.com'],
+      connectSrc: ["'self'", config.aiCoreUrl, config.ollama.url, 'ws://localhost:*', 'wss://localhost:*'],
+      frameAncestors: ["'none'"],
+      formAction: ["'self'"],
+      baseUri: ["'self'"],
+    },
+  },
+  crossOriginEmbedderPolicy: false,
+  // Prevent MIME-type sniffing
+  noSniff: true,
+  // Prevent clickjacking
+  frameguard: { action: 'deny' },
+  // Hide X-Powered-By
+  hidePoweredBy: true,
 }));
 
 app.use(cors({
@@ -66,6 +102,26 @@ app.use(cors({
 // ──────────────────────────────────────────────
 app.use(express.json({ limit: '10mb' }));
 app.use(express.urlencoded({ extended: true, limit: '10mb' }));
+
+// ──────────────────────────────────────────────
+// Security: Input Sanitization
+// ──────────────────────────────────────────────
+app.use(sanitizeInput);  // MongoDB injection protection ($gt, $ne, $where)
+app.use(sanitizeXSS);    // Strip dangerous HTML/JS from req.body
+app.use(hpp());           // HTTP Parameter Pollution protection
+
+// ──────────────────────────────────────────────
+// Response Compression (gzip/brotli)
+// ──────────────────────────────────────────────
+app.use(compression({
+  level: 6,
+  threshold: 1024, // Only compress responses > 1KB
+  filter: (req, res) => {
+    // Skip compression for SSE streams
+    if (req.headers.accept === 'text/event-stream') return false;
+    return compression.filter(req, res);
+  },
+}));
 
 // ──────────────────────────────────────────────
 // Passport (Google OAuth)
@@ -157,6 +213,7 @@ app.get('/api/health', async (req, res) => {
     features: [
       'auth', 'google-oauth', 'documents', 'ai-chat',
       'quiz', 'flashcards', 'knowledge-graph', 'spaced-repetition',
+      'gamification',
     ],
   });
 });
@@ -166,9 +223,18 @@ app.get('/api/health', async (req, res) => {
 // ──────────────────────────────────────────────
 app.use('/api/auth', authRoutes);
 app.use('/api/documents', documentRoutes);
-app.use('/api/ai', aiRoutes);
+app.use('/api/ai', aiLimiter, aiRoutes);
 app.use('/api/learning', learningRoutes);
 app.use('/api/annotations', annotationRoutes);
+app.use('/api/gamification', gamificationRoutes);
+app.use('/api/analytics', analyticsRoutes);
+app.use('/api/collab', collabRoutes);
+app.use('/api/notifications', notificationRoutes);
+app.use('/api/library', libraryRoutes);
+app.use('/api/ocr', ocrRoutes);
+app.use('/api/export', exportRoutes);
+app.use('/api/instructor', instructorRoutes);
+app.use('/api/monitor', monitorRoutes);
 
 // ──────────────────────────────────────────────
 // 404 Handler
@@ -210,6 +276,9 @@ const startServer = async () => {
       currentPort = port;
       const dbIcon = dbConn ? '✅' : '⚠️';
       const dbText = dbConn ? 'Connected' : 'Disconnected (server vẫn chạy)';
+
+      // Attach WebSocket collaboration server
+      setupCollaborationWS(server_instance);
 
       console.log(`
 ╔═══════════════════════════════════════════════════╗
@@ -255,6 +324,12 @@ const startServer = async () => {
     // Ngừng nhận request mới
     server.close(async () => {
       console.log('[Server] HTTP server đã đóng.');
+
+      // Terminate OCR workers
+      try {
+        const { terminateOCR } = await import('./services/ocr.service.js');
+        await terminateOCR();
+      } catch { /* OCR may not have been initialized */ }
 
       // Ngắt MongoDB
       await disconnectDB();

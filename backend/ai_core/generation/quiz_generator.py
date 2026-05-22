@@ -1,5 +1,5 @@
 """
-NEUROVAULT — Quiz Generator v2 (White-Box)
+NEUROVAULT — Quiz Generator v2 (White-Box, Multilingual)
 Tạo câu hỏi từ knowledge graph + chunks + LLM.
 
 v2 Improvements:
@@ -10,6 +10,7 @@ v2 Improvements:
 - Difficulty calibration
 - Better distractor generation
 - Deduplication
+- Multilingual support (Vietnamese + English)
 """
 
 import re
@@ -17,8 +18,8 @@ import random
 import hashlib
 from typing import List, Dict, Optional
 
-# Bloom's Taxonomy levels (educational framework)
-BLOOM_LEVELS = {
+# Bloom's Taxonomy levels — English
+BLOOM_LEVELS_EN = {
     1: {"name": "Remember", "verbs": ["define", "list", "state", "identify", "recall", "name"]},
     2: {"name": "Understand", "verbs": ["explain", "describe", "summarize", "classify", "compare"]},
     3: {"name": "Apply", "verbs": ["apply", "use", "solve", "demonstrate", "calculate"]},
@@ -26,6 +27,74 @@ BLOOM_LEVELS = {
     5: {"name": "Evaluate", "verbs": ["evaluate", "judge", "justify", "critique", "assess"]},
     6: {"name": "Create", "verbs": ["create", "design", "propose", "develop", "formulate"]},
 }
+
+# Bloom's Taxonomy levels — Vietnamese
+BLOOM_LEVELS_VI = {
+    1: {"name": "Nhớ", "verbs": ["định nghĩa", "liệt kê", "nêu", "nhận diện", "nhắc lại", "gọi tên"]},
+    2: {"name": "Hiểu", "verbs": ["giải thích", "mô tả", "tóm tắt", "phân loại", "so sánh"]},
+    3: {"name": "Áp dụng", "verbs": ["áp dụng", "sử dụng", "giải quyết", "minh họa", "tính toán"]},
+    4: {"name": "Phân tích", "verbs": ["phân tích", "xem xét", "phân biệt", "so sánh", "đối chiếu"]},
+    5: {"name": "Đánh giá", "verbs": ["đánh giá", "nhận xét", "lý giải", "phê bình", "thẩm định"]},
+    6: {"name": "Sáng tạo", "verbs": ["sáng tạo", "thiết kế", "đề xuất", "phát triển", "xây dựng"]},
+}
+
+# Question templates per language
+MCQ_TEMPLATES = {
+    "en": {
+        "remember": "According to the document, which statement about '{concept}' is correct?",
+        "apply": "How would you {verb} the concept of '{concept}' based on the document?",
+        "evaluate": "{verb} the role of '{concept}' as described in the document.",
+    },
+    "vi": {
+        "remember": "Theo tài liệu, phát biểu nào sau đây về '{concept}' là đúng?",
+        "apply": "Dựa trên tài liệu, hãy {verb} khái niệm '{concept}'?",
+        "evaluate": "Hãy {verb} vai trò của '{concept}' như được mô tả trong tài liệu.",
+    },
+}
+
+FILL_BLANK_TEMPLATES = {
+    "en": "Fill in the blank: {blanked}",
+    "vi": "Điền vào chỗ trống: {blanked}",
+}
+
+TF_TEMPLATES = {
+    "en": "True or False: {statement}",
+    "vi": "Đúng hay Sai: {statement}",
+}
+
+EXPLANATIONS = {
+    "en": {
+        "mcq": "This answer is found in the passage discussing {concept}.",
+        "fill_blank": "The missing term is '{concept}'.",
+        "tf_true": "This statement is directly supported by the document.",
+        "tf_false": "The correct term should be '{concept}', not as stated.",
+        "distractor_fallback": "{concept} is not discussed in this context",
+        "tf_false_fallback": "{concept} is not related to the topics discussed in this document.",
+    },
+    "vi": {
+        "mcq": "Câu trả lời này được tìm thấy trong đoạn văn thảo luận về {concept}.",
+        "fill_blank": "Từ/cụm từ cần điền là '{concept}'.",
+        "tf_true": "Phát biểu này được hỗ trợ trực tiếp bởi tài liệu.",
+        "tf_false": "Từ đúng phải là '{concept}', không phải như đã nêu.",
+        "distractor_fallback": "{concept} không được đề cập trong ngữ cảnh này",
+        "tf_false_fallback": "{concept} không liên quan đến các chủ đề được thảo luận trong tài liệu này.",
+    },
+}
+
+# Legacy alias for backward compatibility
+BLOOM_LEVELS = BLOOM_LEVELS_EN
+
+
+def _get_bloom_levels(language: str) -> Dict:
+    """Get Bloom's Taxonomy levels for the given language."""
+    if language == "vi":
+        return BLOOM_LEVELS_VI
+    return BLOOM_LEVELS_EN
+
+
+def _get_lang_key(language: str) -> str:
+    """Normalize language to template key ('vi' or 'en')."""
+    return "vi" if language == "vi" else "en"
 
 
 class QuizGenerator:
@@ -42,6 +111,8 @@ class QuizGenerator:
     - difficulty 0-0.3: Remember/Understand
     - difficulty 0.3-0.6: Apply/Analyze
     - difficulty 0.6-1.0: Evaluate/Create
+
+    Multilingual: Vietnamese (vi) + English (en, default)
     """
 
     def __init__(self, llm_engine=None):
@@ -53,14 +124,18 @@ class QuizGenerator:
         chunks: List[Dict],
         num_questions: int = 10,
         difficulty: float = 0.5,
+        language: str = "en",
     ) -> List[Dict]:
         """
         Generate quiz questions from extracted concepts.
 
         Falls back to template-based if LLM unavailable.
         Bloom's level auto-selected based on difficulty.
+        Language determines question/explanation language.
         """
-        bloom_level = self._difficulty_to_bloom(difficulty)
+        lang = _get_lang_key(language)
+        bloom_levels = _get_bloom_levels(language)
+        bloom_level = self._difficulty_to_bloom(difficulty, bloom_levels)
         questions = []
         seen_hashes = set()
 
@@ -81,19 +156,19 @@ class QuizGenerator:
 
             # MCQ
             if len([q for q in questions if q["question_type"] == "mcq"]) < target_mcq:
-                q = self._generate_mcq(concept_name, context, concepts, bloom_level)
+                q = self._generate_mcq(concept_name, context, concepts, bloom_level, lang)
                 if q and self._dedup(q, seen_hashes):
                     questions.append(q)
 
             # Fill-blank
             if len([q for q in questions if q["question_type"] == "fill_blank"]) < target_fill:
-                q = self._generate_fill_blank(concept_name, context)
+                q = self._generate_fill_blank(concept_name, context, lang)
                 if q and self._dedup(q, seen_hashes):
                     questions.append(q)
 
             # True/False
             if len([q for q in questions if q["question_type"] == "true_false"]) < target_tf:
-                q = self._generate_true_false(concept_name, context, concepts)
+                q = self._generate_true_false(concept_name, context, concepts, lang)
                 if q and self._dedup(q, seen_hashes):
                     questions.append(q)
 
@@ -102,7 +177,7 @@ class QuizGenerator:
 
         # If LLM available, enhance questions
         if self.llm and hasattr(self.llm, 'is_available') and self.llm.is_available():
-            questions = self._enhance_with_llm(questions, chunks, bloom_level)
+            questions = self._enhance_with_llm(questions, chunks, bloom_level, lang)
 
         # Set difficulty and bloom level
         for q in questions:
@@ -112,20 +187,21 @@ class QuizGenerator:
         random.shuffle(questions)
         return questions[:num_questions]
 
-    def _difficulty_to_bloom(self, difficulty: float) -> Dict:
+    def _difficulty_to_bloom(self, difficulty: float, bloom_levels: Dict = None) -> Dict:
         """Map difficulty (0-1) to Bloom's Taxonomy level."""
+        levels = bloom_levels or BLOOM_LEVELS_EN
         if difficulty < 0.2:
-            return BLOOM_LEVELS[1]  # Remember
+            return levels[1]  # Remember / Nhớ
         elif difficulty < 0.35:
-            return BLOOM_LEVELS[2]  # Understand
+            return levels[2]  # Understand / Hiểu
         elif difficulty < 0.5:
-            return BLOOM_LEVELS[3]  # Apply
+            return levels[3]  # Apply / Áp dụng
         elif difficulty < 0.7:
-            return BLOOM_LEVELS[4]  # Analyze
+            return levels[4]  # Analyze / Phân tích
         elif difficulty < 0.85:
-            return BLOOM_LEVELS[5]  # Evaluate
+            return levels[5]  # Evaluate / Đánh giá
         else:
-            return BLOOM_LEVELS[6]  # Create
+            return levels[6]  # Create / Sáng tạo
 
     def _find_best_context(self, concept: str, chunks: List[Dict]) -> Optional[str]:
         """Find the best chunk context for a concept."""
@@ -154,9 +230,9 @@ class QuizGenerator:
         return True
 
     def _generate_mcq(
-        self, concept: str, context: str, all_concepts: List[Dict], bloom: Dict
+        self, concept: str, context: str, all_concepts: List[Dict], bloom: Dict, lang: str = "en"
     ) -> Optional[Dict]:
-        """Generate Multiple Choice Question with Bloom's level."""
+        """Generate Multiple Choice Question with Bloom's level, language-aware."""
         sentences = re.split(r'[.!?]+', context)
         target_sent = None
         for s in sentences:
@@ -167,14 +243,20 @@ class QuizGenerator:
         if not target_sent:
             return None
 
+        templates = MCQ_TEMPLATES.get(lang, MCQ_TEMPLATES["en"])
+        explanations = EXPLANATIONS.get(lang, EXPLANATIONS["en"])
+
         # Create question based on Bloom's level
         verb = random.choice(bloom["verbs"])
-        if bloom["name"] in ("Remember", "Understand"):
-            question_text = f"According to the document, which statement about '{concept}' is correct?"
-        elif bloom["name"] in ("Apply", "Analyze"):
-            question_text = f"How would you {verb} the concept of '{concept}' based on the document?"
+        bloom_name = bloom["name"]
+
+        # Map bloom name to template category (works for both EN and VI)
+        if bloom_name in ("Remember", "Understand", "Nhớ", "Hiểu"):
+            question_text = templates["remember"].format(concept=concept)
+        elif bloom_name in ("Apply", "Analyze", "Áp dụng", "Phân tích"):
+            question_text = templates["apply"].format(verb=verb, concept=concept)
         else:
-            question_text = f"{verb.capitalize()} the role of '{concept}' as described in the document."
+            question_text = templates["evaluate"].format(verb=verb.capitalize(), concept=concept)
 
         # Generate distractors
         other_concepts = [c["concept"] for c in all_concepts if c["concept"] != concept]
@@ -185,11 +267,11 @@ class QuizGenerator:
             distractors.append(
                 target_sent.replace(concept, oc)
                 if concept in target_sent
-                else f"{concept} is equivalent to {oc}"
+                else f"{concept} {'tương đương với' if lang == 'vi' else 'is equivalent to'} {oc}"
             )
 
         while len(distractors) < 3:
-            distractors.append(f"{concept} is not discussed in this context")
+            distractors.append(explanations["distractor_fallback"].format(concept=concept))
 
         return {
             "question_text": question_text,
@@ -197,12 +279,15 @@ class QuizGenerator:
             "correct_answer": target_sent[:200],
             "distractors": distractors[:3],
             "source_concept": concept,
-            "explanation": f"This answer is found in the passage discussing {concept}.",
+            "explanation": explanations["mcq"].format(concept=concept),
         }
 
-    def _generate_fill_blank(self, concept: str, context: str) -> Optional[Dict]:
-        """Generate Fill-in-the-blank question."""
+    def _generate_fill_blank(self, concept: str, context: str, lang: str = "en") -> Optional[Dict]:
+        """Generate Fill-in-the-blank question, language-aware."""
         sentences = re.split(r'[.!?]+', context)
+        template = FILL_BLANK_TEMPLATES.get(lang, FILL_BLANK_TEMPLATES["en"])
+        explanations = EXPLANATIONS.get(lang, EXPLANATIONS["en"])
+
         for s in sentences:
             if concept.lower() in s.lower() and len(s.strip()) > 25:
                 blanked = re.sub(
@@ -214,19 +299,19 @@ class QuizGenerator:
                 )
                 if "_______" in blanked:
                     return {
-                        "question_text": f"Fill in the blank: {blanked}",
+                        "question_text": template.format(blanked=blanked),
                         "question_type": "fill_blank",
                         "correct_answer": concept,
                         "distractors": [],
                         "source_concept": concept,
-                        "explanation": f"The missing term is '{concept}'.",
+                        "explanation": explanations["fill_blank"].format(concept=concept),
                     }
         return None
 
     def _generate_true_false(
-        self, concept: str, context: str, all_concepts: List[Dict]
+        self, concept: str, context: str, all_concepts: List[Dict], lang: str = "en"
     ) -> Optional[Dict]:
-        """Generate True/False question."""
+        """Generate True/False question, language-aware."""
         sentences = re.split(r'[.!?]+', context)
         target_sent = None
         for s in sentences:
@@ -237,13 +322,16 @@ class QuizGenerator:
         if not target_sent:
             return None
 
+        template = TF_TEMPLATES.get(lang, TF_TEMPLATES["en"])
+        explanations = EXPLANATIONS.get(lang, EXPLANATIONS["en"])
+
         # 50% chance of true vs false
         is_true = random.random() > 0.5
 
         if is_true:
             statement = target_sent[:200]
-            correct_answer = "True"
-            explanation = "This statement is directly supported by the document."
+            correct_answer = "Đúng" if lang == "vi" else "True"
+            explanation = explanations["tf_true"]
         else:
             # Create false statement by negation or substitution
             other = [c["concept"] for c in all_concepts if c["concept"] != concept]
@@ -251,12 +339,12 @@ class QuizGenerator:
                 replacement = random.choice(other)
                 statement = target_sent.replace(concept, replacement)[:200]
             else:
-                statement = f"{concept} is not related to the topics discussed in this document."
-            correct_answer = "False"
-            explanation = f"The correct term should be '{concept}', not as stated."
+                statement = explanations["tf_false_fallback"].format(concept=concept)
+            correct_answer = "Sai" if lang == "vi" else "False"
+            explanation = explanations["tf_false"].format(concept=concept)
 
         return {
-            "question_text": f"True or False: {statement}",
+            "question_text": template.format(statement=statement),
             "question_type": "true_false",
             "correct_answer": correct_answer,
             "distractors": [],
@@ -265,19 +353,33 @@ class QuizGenerator:
         }
 
     def _enhance_with_llm(
-        self, questions: List[Dict], chunks: List[Dict], bloom: Dict
+        self, questions: List[Dict], chunks: List[Dict], bloom: Dict, lang: str = "en"
     ) -> List[Dict]:
-        """Use LLM to improve question quality."""
+        """Use LLM to improve question quality, respecting language."""
         if not self.llm:
             return questions
 
-        for q in questions[:5]:  # Enhance first 5 to save compute
-            prompt = f"""Improve this quiz question for educational quality.
-Bloom's Level: {bloom['name']}
-Question: {q['question_text']}
-Answer: {q['correct_answer']}
+        if lang == "vi":
+            prompt_template = """Cải thiện câu hỏi quiz sau đây cho mục đích giáo dục.
+Mức Bloom: {bloom_name}
+Câu hỏi: {question}
+Đáp án: {answer}
+
+Trả về CHỈ câu hỏi đã cải thiện bằng TIẾNG VIỆT, không thêm gì khác."""
+        else:
+            prompt_template = """Improve this quiz question for educational quality.
+Bloom's Level: {bloom_name}
+Question: {question}
+Answer: {answer}
 
 Return ONLY the improved question text, nothing else."""
+
+        for q in questions[:5]:  # Enhance first 5 to save compute
+            prompt = prompt_template.format(
+                bloom_name=bloom['name'],
+                question=q['question_text'],
+                answer=q['correct_answer'],
+            )
             try:
                 improved = self.llm.generate(prompt, temperature=0.3, max_tokens=200)
                 if improved and not improved.startswith("[ERROR]") and len(improved) > 10:

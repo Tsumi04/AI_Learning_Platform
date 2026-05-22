@@ -17,6 +17,7 @@ v3.0 Upgrades:
 
 import json
 import re
+import os
 import time
 import math
 import random
@@ -25,6 +26,13 @@ import httpx
 from typing import Optional, Dict, List, Any, Generator, Tuple
 from dataclasses import dataclass, field
 from enum import Enum
+
+# BPE Tokenizer — white-box token counting
+try:
+    from tokenizer.bpe_tokenizer import BPETokenizer
+    _BPE_AVAILABLE = True
+except ImportError:
+    _BPE_AVAILABLE = False
 
 
 class CircuitState(Enum):
@@ -76,15 +84,17 @@ class LLMEngine:
     def __init__(
         self,
         base_url: str = "http://127.0.0.1:11434",
-        model: str = "gemma4:e4b",
+        model: str = "",
         timeout: float = 120.0,
         max_retries: int = 3,
         circuit_breaker_threshold: int = 5,
         circuit_breaker_timeout: float = 60.0,
         max_concurrent: int = 4,
     ):
-        self.base_url = base_url.rstrip("/")
-        self.model = model
+        self.base_url = os.getenv("OLLAMA_URL", base_url).rstrip("/")
+        # Model priority: explicit param → env var → default (qwen3:1.7b)
+        # qwen3:1.7b chosen for RTX 3050 4GB VRAM — fast, Apache 2.0
+        self.model = model or os.getenv("LLM_MODEL", "qwen3:1.7b")
         self.timeout = timeout
         self.max_retries = max_retries
 
@@ -111,6 +121,25 @@ class LLMEngine:
 
         # Metrics
         self.metrics = InferenceMetrics()
+
+        # BPE Tokenizer — accurate token counting (white-box)
+        self._tokenizer = None
+        if _BPE_AVAILABLE:
+            try:
+                vocab_path = os.path.join(
+                    os.path.dirname(os.path.dirname(__file__)),
+                    "data", "bpe_vocab.json"
+                )
+                if os.path.exists(vocab_path):
+                    self._tokenizer = BPETokenizer.load(vocab_path)
+                    print(f"[LLMEngine] BPE tokenizer loaded (vocab={self._tokenizer.vocab_size_actual()})")
+                else:
+                    # Tạo tokenizer cơ bản — sẽ dùng char-level fallback
+                    self._tokenizer = BPETokenizer(vocab_size=8192)
+                    print("[LLMEngine] BPE tokenizer initialized (untrained, char-level fallback)")
+            except Exception as e:
+                print(f"[LLMEngine] BPE tokenizer init failed: {e}")
+                self._tokenizer = None
 
     # ══════════════════════════════════════════════
     # CIRCUIT BREAKER
@@ -805,6 +834,23 @@ class LLMEngine:
         with self._cb_lock:
             self._cb_state = CircuitState.CLOSED
             self._cb_failure_count = 0
+
+    def count_tokens(self, text: str) -> int:
+        """Count tokens in text using BPE tokenizer or heuristic fallback."""
+        if self._tokenizer:
+            return len(self._tokenizer.encode(text))
+        # Heuristic fallback: ~1 token per 4 characters (EN) or 2 chars (VI)
+        vi_chars = set("àáảãạăắằẳẵặâấầẩẫậèéẻẽẹêếềểễệìíỉĩịòóỏõọôốồổỗộơớờởỡợùúủũụưứừửữựỳýỷỹỵđ")
+        has_vi = any(c in vi_chars for c in text.lower())
+        ratio = 2.0 if has_vi else 4.0
+        return max(1, int(len(text) / ratio))
+
+    def tokenize(self, text: str) -> list:
+        """Tokenize text into subword tokens (strings)."""
+        if self._tokenizer:
+            return self._tokenizer.tokenize(text)
+        # Fallback: simple whitespace split
+        return text.split()
 
     def __del__(self):
         """Cleanup HTTP clients."""

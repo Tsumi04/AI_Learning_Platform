@@ -7,6 +7,7 @@ import {
   PanelLeftClose, PanelLeftOpen,
 } from 'lucide-react';
 import { documentsAPI, aiAPI } from '../services/api';
+import useI18nStore from '../store/useI18nStore';
 import StreamingChatBox from '../components/chat/StreamingChatBox';
 import QuizView from '../components/quiz/QuizView';
 import FlashcardView from '../components/flashcard/FlashcardView';
@@ -75,6 +76,7 @@ const AI_TABS = [
 
 export default function AIStudioPage() {
   const navigate = useNavigate();
+  const t = useI18nStore(s => s.t);
   const [searchParams, setSearchParams] = useSearchParams();
 
   // ── State ──
@@ -172,14 +174,14 @@ export default function AIStudioPage() {
           </div>
           <div>
             <h3 style={{ fontSize: '1.125rem', fontWeight: 600, color: 'var(--c-text-primary)', marginBottom: 6 }}>
-              Chọn tài liệu để bắt đầu
+              {t('aiStudio.selectDoc')}
             </h3>
             <p style={{ fontSize: '0.875rem', color: 'var(--c-text-secondary)', maxWidth: 320 }}>
-              Chọn một tài liệu đã xử lý từ danh sách bên trái, hoặc upload tài liệu mới.
+              {t('aiStudio.selectDocDesc')}
             </p>
           </div>
           <button className="btn btn-primary" onClick={() => navigate('/documents')}>
-            <FileText size={16} /> Quản lý tài liệu
+            <FileText size={16} /> {t('aiStudio.manageDocs')}
           </button>
         </div>
       );
@@ -230,7 +232,7 @@ export default function AIStudioPage() {
               fontSize: '1.5rem', fontWeight: 700, color: 'var(--c-text-primary)',
               letterSpacing: '-0.03em',
             }}>
-              AI-Powered Learning Tools
+              {t('aiStudio.title')}
             </h1>
           </div>
 
@@ -253,7 +255,7 @@ export default function AIStudioPage() {
                   background: aiStatus.llm_available ? 'var(--c-success)' : '#b45309',
                   boxShadow: aiStatus.llm_available ? '0 0 6px var(--c-success)' : 'none',
                 }} />
-                {aiStatus.llm_available ? 'Gemma 4 Online' : 'AI Offline'}
+                {aiStatus.llm_available ? t('aiStudio.aiOnline') : t('aiStudio.aiOffline')}
               </div>
             )}
           </div>
@@ -287,7 +289,7 @@ export default function AIStudioPage() {
               marginBottom: 'var(--space-sm)',
             }}>
               <span style={{ fontSize: '0.75rem', fontWeight: 600, color: 'var(--c-text-secondary)' }}>
-                Tài liệu ({documents.length})
+                {t('aiStudio.docCount', { count: documents.length })}
               </span>
               <button
                 onClick={() => setSidebarOpen(false)}
@@ -308,7 +310,7 @@ export default function AIStudioPage() {
               type="text"
               value={searchQuery}
               onChange={e => setSearchQuery(e.target.value)}
-              placeholder="Tìm tài liệu..."
+              placeholder={t('aiStudio.searchDocs')}
               className="input"
               style={{
                 fontSize: '0.75rem', padding: '0.5rem 0.75rem',
@@ -332,8 +334,8 @@ export default function AIStudioPage() {
                   color: 'var(--c-text-tertiary)', fontSize: '0.8125rem',
                 }}>
                   {documents.length === 0
-                    ? 'Chưa có tài liệu. Upload để bắt đầu.'
-                    : 'Không tìm thấy tài liệu.'}
+                    ? t('documents.noDocuments')
+                    : t('common.noResults')}
                 </div>
               ) : (
                 filteredDocs.map(doc => {
@@ -389,7 +391,7 @@ export default function AIStudioPage() {
               onClick={() => navigate('/documents')}
               style={{ marginTop: 'var(--space-sm)', width: '100%', justifyContent: 'center', gap: 6 }}
             >
-              <FileText size={13} /> Quản lý tài liệu
+              <FileText size={13} /> {t('aiStudio.manageDocs')}
             </button>
           </div>
         </div>

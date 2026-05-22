@@ -5,6 +5,9 @@ import {
 } from 'lucide-react';
 import useAuthStore from '../../store/useAuthStore';
 import { getAccessToken } from '../../services/api';
+import useSpeechRecognition from '../../hooks/useSpeechRecognition';
+import useSpeechSynthesis from '../../hooks/useSpeechSynthesis';
+import { VoiceInputButton, TTSButton, VoiceLanguageSelector } from '../voice/VoiceControls';
 
 /**
  * StreamingChatBox — SSE Streaming Chat với RAG
@@ -43,6 +46,14 @@ export default function StreamingChatBox({ documentId, documentTitle }) {
   const [isStreaming, setIsStreaming] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState('unknown'); // unknown | online | offline
   const [copiedId, setCopiedId] = useState(null);
+  const [voiceLang, setVoiceLang] = useState('vi-VN');
+
+  // ── Voice hooks ──
+  const stt = useSpeechRecognition({
+    language: voiceLang,
+    onResult: (text) => setInputText(prev => prev + text),
+  });
+  const tts = useSpeechSynthesis();
 
   // ── Refs ──
   const messagesEndRef = useRef(null);
@@ -460,7 +471,7 @@ export default function StreamingChatBox({ documentId, documentTitle }) {
               </div>
 
               {/* Message actions (copy) — chỉ hiện cho AI messages khi không streaming */}
-              {msg.role === 'ai' && !msg.isStreaming && msg.id !== 'welcome' && !msg.isError && (
+                {msg.role === 'ai' && !msg.isStreaming && msg.id !== 'welcome' && !msg.isError && (
                 <div style={{
                   display: 'flex', gap: 2, marginTop: 4,
                 }}>
@@ -479,6 +490,11 @@ export default function StreamingChatBox({ documentId, documentTitle }) {
                   >
                     {copiedId === msg.id ? <Check size={11} color="var(--c-success)" /> : <Copy size={11} />}
                   </button>
+                  <TTSButton
+                    isSpeaking={tts.isSpeaking}
+                    isSupported={tts.isSupported}
+                    onClick={() => tts.isSpeaking ? tts.stop() : tts.speak(msg.content, { language: voiceLang })}
+                  />
                 </div>
               )}
 
@@ -511,14 +527,25 @@ export default function StreamingChatBox({ documentId, documentTitle }) {
           </button>
         )}
 
-        <div style={{ position: 'relative', display: 'flex', alignItems: 'center' }}>
+        <div style={{ position: 'relative', display: 'flex', alignItems: 'center', gap: 4 }}>
+          {/* Voice language selector */}
+          {stt.isSupported && <VoiceLanguageSelector language={voiceLang} onChange={setVoiceLang} />}
+
+          {/* Voice input button */}
+          <VoiceInputButton
+            isListening={stt.isListening}
+            isSupported={stt.isSupported}
+            onClick={() => stt.toggleListening({ language: voiceLang })}
+            error={stt.error}
+          />
+
           <input
             ref={inputRef}
             type="text"
             value={inputText}
             onChange={e => setInputText(e.target.value)}
             onKeyDown={e => e.key === 'Enter' && handleSend()}
-            placeholder="Hỏi về tài liệu này..."
+            placeholder={stt.isListening ? 'Đang nghe...' : 'Hỏi về tài liệu này...'}
             disabled={isStreaming}
             className="input"
             style={{
@@ -526,6 +553,7 @@ export default function StreamingChatBox({ documentId, documentTitle }) {
               paddingRight: '3rem', background: 'var(--c-bg-secondary)',
               opacity: isStreaming ? 0.6 : 1,
               fontSize: '0.8125rem',
+              borderColor: stt.isListening ? 'rgba(239,68,68,0.3)' : undefined,
             }}
           />
           {isStreaming ? (

@@ -180,10 +180,107 @@ router.post('/record-activity', auth, async (req, res, next) => {
 
     await progress.save();
 
+    // ── Gamification: Award XP ──
+    let gamificationResult = null;
+    try {
+      const Gamification = (await import('../models/Gamification.model.js')).default;
+
+      let gamProfile = await Gamification.findOne({ user_id: userId });
+      if (!gamProfile) {
+        gamProfile = await Gamification.create({ user_id: userId });
+      }
+
+      let xpAmount = 0;
+      const metadata = { durationMinutes: Math.ceil(durationSeconds / 60) };
+
+      if (type === 'quiz') {
+        xpAmount = 20 + Math.round(((results.quiz?.score_percentage || 0) / 100) * 30);
+        metadata.scorePercent = results.quiz?.score_percentage || 0;
+        gamProfile.lifetime.quizzes_completed = (gamProfile.lifetime.quizzes_completed || 0) + 1;
+        if (metadata.scorePercent >= 100) {
+          gamProfile.lifetime.perfect_quizzes = (gamProfile.lifetime.perfect_quizzes || 0) + 1;
+        }
+      } else if (type === 'flashcard') {
+        const cards = results.flashcard?.cards_reviewed || 1;
+        xpAmount = 5 * cards;
+        metadata.cardsReviewed = cards;
+        gamProfile.lifetime.flashcards_reviewed = (gamProfile.lifetime.flashcards_reviewed || 0) + cards;
+      } else if (type === 'chat') {
+        xpAmount = 3;
+        gamProfile.lifetime.chat_messages = (gamProfile.lifetime.chat_messages || 0) + 1;
+      } else if (type === 'reading') {
+        xpAmount = 2 * Math.max(1, Math.ceil(durationSeconds / 60));
+      }
+
+      // Update study time
+      gamProfile.lifetime.total_study_minutes = (gamProfile.lifetime.total_study_minutes || 0) +
+        Math.ceil(durationSeconds / 60);
+
+      if (xpAmount > 0) {
+        gamificationResult = gamProfile.awardXP(xpAmount, type === 'quiz' ? 'complete_quiz' :
+          type === 'flashcard' ? 'review_flashcard' :
+          type === 'chat' ? 'chat_message' : 'reading_session', type);
+      }
+
+      // Check daily challenge
+      const today = new Date().toISOString().slice(0, 10);
+      const todayChallenge = gamProfile.daily_challenges.find(c => c.date === today && !c.completed);
+      if (todayChallenge) {
+        const action = type === 'quiz' ? 'complete_quiz' :
+          type === 'flashcard' ? 'review_flashcard' :
+          type === 'chat' ? 'chat_message' : 'reading_session';
+
+        // Update challenge progress inline
+        if (todayChallenge.challenge_type === 'quiz_score' && type === 'quiz') {
+          todayChallenge.progress = Math.max(todayChallenge.progress, Math.round(metadata.scorePercent || 0));
+        } else if (todayChallenge.challenge_type === 'flashcard_count' && type === 'flashcard') {
+          todayChallenge.progress += (metadata.cardsReviewed || 1);
+        } else if (todayChallenge.challenge_type === 'study_time') {
+          todayChallenge.progress += Math.ceil(durationSeconds / 60);
+        } else if (todayChallenge.challenge_type === 'chat_count' && type === 'chat') {
+          todayChallenge.progress += 1;
+        }
+
+        if (todayChallenge.progress >= todayChallenge.target && !todayChallenge.completed) {
+          todayChallenge.completed = true;
+          todayChallenge.completed_at = new Date();
+          gamProfile.awardXP(todayChallenge.xp_reward || 100, 'daily_challenge', todayChallenge.title);
+        }
+      }
+
+      await gamProfile.save();
+
+      // ── Notifications ──
+      try {
+        const { NotificationTemplates } = await import('../services/notification.service.js');
+
+        // Level up notification
+        if (gamificationResult?.leveledUp) {
+          await NotificationTemplates.levelUp(userId, gamificationResult.newLevel, gamificationResult.newTier);
+        }
+
+        // Daily challenge complete
+        if (todayChallenge?.completed && todayChallenge?.completed_at) {
+          await NotificationTemplates.dailyChallengeComplete(userId, todayChallenge.title, todayChallenge.xp_reward || 100);
+        }
+
+        // Quiz score notification
+        if (type === 'quiz' && metadata.scorePercent != null) {
+          await NotificationTemplates.quizComplete(userId, Math.round(metadata.scorePercent), results.quiz?.document_title);
+        }
+      } catch (notifErr) {
+        console.error('[Notification] Error:', notifErr.message);
+      }
+    } catch (gamErr) {
+      // Non-critical — don't break activity recording
+      console.error('[Gamification] XP award error:', gamErr.message);
+    }
+
     res.status(201).json({
       message: 'Activity recorded',
       session: { id: session._id, type, duration: durationSeconds },
       streak: progress.streak,
+      gamification: gamificationResult,
     });
   } catch (err) {
     next(err);

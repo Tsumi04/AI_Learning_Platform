@@ -103,11 +103,15 @@ class ConceptExtractor:
         return {k: v for k, v in ngrams.items() if v > 0.01}
 
     def extract_definitions(self, text: str) -> List[Dict]:
-        """Extract concept-definition pairs using pattern matching."""
+        """Extract concept-definition pairs using pattern matching (EN + VI)."""
         patterns = [
+            # English patterns
             r'(?:^|\. )([A-Z][^.]+?) (?:is|are|refers to|means|defined as) ([^.]+\.)',
             r'(?:^|\. )([A-Z][^.]+?) — ([^.]+\.)',
             r'(?:^|\. )([A-Z][^.]+?): ([^.]+\.)',
+            # Vietnamese patterns
+            r'(?:^|\. )([A-ZÀ-Ỹ][^.]{3,40}?)\s+(?:là|được định nghĩa là|có nghĩa là|được hiểu là)\s+([^.]{15,200})\.',
+            r'(?:^|\. )([A-ZÀ-Ỹ][^.]{3,40}?)\s*[—–]\s*([^.]{15,200})\.',
         ]
         definitions = []
         for pattern in patterns:

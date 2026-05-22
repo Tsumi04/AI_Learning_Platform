@@ -41,6 +41,7 @@ from agents.agent_message import (
 )
 from agents.agent_context import AgentContext, LearnerProfile, DocumentContext
 from agents.registry import AgentRegistry
+from agents.agent_memory import MemoryManager
 
 
 # ──── Intent Classification ────
@@ -172,6 +173,9 @@ class AgentOrchestrator:
         # Active conversations
         self._conversations: Dict[str, AgentContext] = {}
         self._message_chains: Dict[str, MessageChain] = {}
+
+        # Memory managers — 1 per learner (4-layer: Working, Short-term, Episodic, Long-term)
+        self._memory_managers: Dict[str, MemoryManager] = {}
 
         # Metrics
         self._metrics = {
@@ -320,7 +324,15 @@ class AgentOrchestrator:
                 if handoff_result:
                     return handoff_result
 
-            # Step 9: Build final response
+            # Step 9: Learn from interaction — update long-term memory
+            self._learn_from_interaction(
+                context=context,
+                intent=intent,
+                agent_id=agent.agent_id,
+                response_data=response_content.get("data", {}),
+            )
+
+            # Step 10: Build final response
             self._metrics["successful"] += 1
             return self._build_response(
                 success=True,
@@ -596,14 +608,37 @@ Intent:"""
 
         self._conversations[ctx.conversation_id] = ctx
 
+        # Attach MemoryManager cho learner (tạo mới nếu chưa có)
+        memory = self._get_memory_manager(learner_id)
+        # Store memory manager reference trên context để agents truy cập được
+        ctx.set_metadata("memory_manager", memory)
+
+        # Inject episodic context vào scratch để agents có thể đọc
+        recent_episodes = memory.episodic.retrieve_recent_episodes(limit=3)
+        if recent_episodes:
+            ctx.set_scratch("orchestrator", "recent_episodes", recent_episodes)
+        learner_prefs = memory.long_term.get_category("preferences")
+        if learner_prefs:
+            ctx.set_scratch("orchestrator", "learner_preferences", learner_prefs)
+        learner_facts = memory.long_term.get_category("general")
+        if learner_facts:
+            ctx.set_scratch("orchestrator", "learner_facts", learner_facts)
+
         # Cleanup old conversations (giữ tối đa 100)
         if len(self._conversations) > 100:
             self._cleanup_old_conversations()
 
         return ctx
 
+    def _get_memory_manager(self, learner_id: str) -> MemoryManager:
+        """Get or create MemoryManager cho learner (4-layer memory)."""
+        if learner_id not in self._memory_managers:
+            self._memory_managers[learner_id] = MemoryManager(learner_id)
+        return self._memory_managers[learner_id]
+
     def _cleanup_old_conversations(self) -> None:
-        """Xoá conversations cũ nhất khi vượt quá giới hạn."""
+        """Xoá conversations cũ nhất khi vượt quá giới hạn.
+        Trước khi xoá, archive session vào Episodic Memory."""
         if len(self._conversations) <= 100:
             return
 
@@ -612,7 +647,18 @@ Intent:"""
             self._conversations.items(),
             key=lambda x: x[1].last_activity,
         )
-        for conv_id, _ in sorted_convs[:20]:
+        for conv_id, ctx in sorted_convs[:20]:
+            # Archive session trước khi xoá
+            try:
+                learner_id = ctx.learner.learner_id if ctx.learner else "anonymous"
+                memory = self._get_memory_manager(learner_id)
+                turn_count = len(ctx.conversation_turns) if hasattr(ctx, 'conversation_turns') else 0
+                memory.archive_session(
+                    session_summary=f"Session {conv_id[:8]}: {turn_count} turns",
+                    extra_details={"conversation_id": conv_id},
+                )
+            except Exception:
+                pass  # Không block cleanup nếu archive fail
             del self._conversations[conv_id]
             self._message_chains.pop(conv_id, None)
 
@@ -621,6 +667,71 @@ Intent:"""
         if conversation_id not in self._message_chains:
             self._message_chains[conversation_id] = MessageChain(conversation_id)
         return self._message_chains[conversation_id]
+
+    def _learn_from_interaction(
+        self,
+        context: AgentContext,
+        intent: str,
+        agent_id: str,
+        response_data: Dict[str, Any],
+    ) -> None:
+        """
+        Learn from successful interaction — update long-term memory.
+        Ghi nhận facts về learner để cải thiện phiên sau.
+        """
+        try:
+            memory = context.get_metadata("memory_manager")
+            if not memory:
+                return
+
+            # Record session turn vào short-term memory
+            memory.short_term.add_turn(
+                role="system",
+                content=f"Intent: {intent}, Agent: {agent_id}",
+                metadata={"intent": intent, "agent_id": agent_id},
+            )
+
+            # Learn mastery changes
+            active_concepts = response_data.get("active_concepts", [])
+            if active_concepts:
+                memory.long_term.update_fact(
+                    category="recent_topics",
+                    fact_key="last_concepts",
+                    fact_value=active_concepts[:5],
+                )
+
+            # Learn frustration patterns
+            frustration = response_data.get("frustration_level", 0)
+            if frustration >= 0.6:
+                memory.long_term.update_fact(
+                    category="learning_patterns",
+                    fact_key="frustrated_recently",
+                    fact_value=True,
+                )
+
+            # Learn scaffolding level preference
+            scaffolding = response_data.get("scaffolding_level")
+            if scaffolding:
+                memory.long_term.update_fact(
+                    category="preferences",
+                    fact_key="scaffolding_level",
+                    fact_value=scaffolding,
+                )
+
+            # Track interaction count
+            learner_id = context.learner.learner_id if context.learner else "anonymous"
+            interaction_count = memory.long_term.get_fact(
+                "stats", "total_agent_interactions", 0
+            )
+            memory.long_term.update_fact(
+                category="stats",
+                fact_key="total_agent_interactions",
+                fact_value=interaction_count + 1,
+            )
+
+        except Exception as e:
+            # Non-critical — don't break main flow
+            print(f"[Orchestrator] Memory learn error: {e}")
 
     # ════════════════════════════════════════════════
     # FALLBACK

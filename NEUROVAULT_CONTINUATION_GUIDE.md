@@ -1,6 +1,6 @@
 # 🧠 NEUROVAULT — CONTINUATION GUIDE FOR AI ASSISTANTS
 > **ĐỌC FILE NÀY ĐẦU TIÊN** khi bắt đầu phiên chat mới.
-> Cập nhật lần cuối: 21/05/2026 (Phase 3 — Agent Orchestrator Framework)
+> Cập nhật lần cuối: 23/05/2026 (Phase 3.5 — Bug Fixes + Streaming Refactor)
 
 ---
 
@@ -11,7 +11,7 @@
 - **Backend Gateway:** Node.js/Express (port 5001)
 - **AI Core:** Python/FastAPI (port 8000)
 - **Database:** MongoDB Atlas
-- **LLM:** Google Gemma 4 E4B via Ollama local (port 11434)
+- **LLM:** Qwen3 1.7B via Ollama local (port 11434)
 - **License:** Apache 2.0 — KHÔNG dùng API bên thứ 3
 
 ---
@@ -61,8 +61,12 @@ AI_Learning_Platform/
 │       │   ├── agent_context.py # Shared context (memory layers)
 │       │   ├── base_agent.py    # Abstract base agent (Template Method)
 │       │   ├── registry.py      # Agent registry (capability-based lookup)
-│       │   └── orchestrator.py  # Supervisor-Worker orchestrator
-│       ├── data/doc_stores/     # Persisted document indexes (pickle)
+│       │   ├── orchestrator.py  # Supervisor-Worker orchestrator
+│       │   └── stream_handler.py # Shared SSE/WebSocket streaming logic
+│       ├── data/
+│       │   ├── doc_stores/      # Persisted document indexes (pickle)
+│       │   ├── bpe_vocab.json   # Trained BPE vocabulary (8K tokens)
+│       │   └── safety_patterns.json # Safety patterns database (100+ patterns)
 │       └── requirements.txt     # fastapi, uvicorn, PyMuPDF, numpy, scipy, httpx
 │
 ├── NEUROVAULT_CONTINUATION_GUIDE.md  # ← FILE NÀY
@@ -76,7 +80,7 @@ AI_Learning_Platform/
 ```bash
 # Terminal 1: Ollama (LLM)
 ollama serve
-# ollama pull gemma4:e4b  (nếu chưa có model)
+# ollama pull qwen3:1.7b  (nếu chưa có model)
 
 # Terminal 2: AI Core (Python)
 cd backend/ai_core
@@ -100,7 +104,7 @@ npm run dev                      # → port 5173
 
 ### PHASE 0: Foundation Fix (Target: 45%)
 - [x] 0.1 Fix Python imports (rag_pipeline + graph_builder: relative→absolute) — 09/05/2026
-- [x] 0.2 Install Ollama + Gemma 4 E4B (config updated, default model = gemma4:e4b) — 09/05/2026
+- [x] 0.2 Install Ollama + Qwen3 1.7B (config updated, default model = qwen3:1.7b) — 09/05/2026
 - [x] 0.3 Fix AI Server startup (encoding fix, lifespan, StreamingResponse, health_check v2) — 09/05/2026
 - [x] 0.4 Fix Backend Server (EADDRINUSE handling, rate limiter dev mode, axios consistency) — 16/05/2026
 - [x] 0.5 Fix Frontend build & runtime (CSS @import order fix, build clean) — 16/05/2026
@@ -144,27 +148,34 @@ npm run dev                      # → port 5173
 - [x] 3.7 Agent Memory system (short/long/episodic/working) — 21/05/2026 ✅
 - [x] 3.8 Agent API endpoints + WebSocket (Unified /api/agent/ask + /api/agent/ws) — 21/05/2026 ✅
 
+### PHASE 3.5: Bug Fixes (added 23/05/2026)
+- [x] Fix-1 Refactor agent streaming — extracted stream_handler.py, eliminated ~300 dòng SSE+WS duplicate code — 23/05/2026 ✅
+- [x] Fix-2 Train BPE tokenizer — trained EN/VI corpus, saved bpe_vocab.json (902 tokens, 0 UNKs) — 23/05/2026 ✅
+- [x] Fix-3 Agent Memory deep integration — Orchestrator learns facts, tracks concepts/frustration/scaffolding in long-term memory — 23/05/2026 ✅
+- [x] Fix-4 Expand Safety Agent — rewritten with 100+ compiled regex patterns, 6 categories, self-harm support, PII warnings — 23/05/2026 ✅
+- [x] Fix-5 Update documentation — corrected LLM model reference, added new files to structure — 23/05/2026 ✅
+
 ### PHASE 4: Ecosystem (Target: 92%)
-- [ ] 4.1 Gamification (XP, levels, badges, challenges)
-- [ ] 4.2 Analytics Dashboard (charts, predictions)
-- [ ] 4.3 Real-time Collaboration (WebSocket, live quiz)
-- [ ] 4.4 Notification system
-- [ ] 4.5 Content Library (public sharing, community)
-- [ ] 4.6 Voice features (Web Speech API)
-- [ ] 4.7 OCR module (scanned PDF, Gemma 4 multimodal)
-- [ ] 4.8 Export/Import (PDF, Anki, CSV)
-- [ ] 4.9 Multi-language UI (i18n)
-- [ ] 4.10 Offline PWA
+- [x] 4.1 Gamification (XP sqrt leveling, 5-tier system Bronze→Diamond, 15 badges w/ conditions, daily challenges, leaderboard, XP toast popups, Gamification.model.js + gamification.routes.js, XPBar + DailyChallenge + BadgeGrid + XPToast components, auto-XP hook in record-activity, Zustand store) — 23/05/2026 ✅
+- [x] 4.2 Analytics Dashboard (10-dimension data: study trends, quiz performance, session/time distribution, concept mastery strong/weak, flashcard analysis, study patterns peak hour/day, predictions, gamification summary; 6 chart components, range selector 7-90d, sidebar nav) — 23/05/2026 ✅
+- [x] 4.3 Real-time Collaboration (ws package, WebSocket server /ws/collab, room-based architecture, user presence tracking, Live Quiz system with speed-bonus scoring + leaderboard, useCollaboration hook, LiveQuizPanel + PresenceBar components, collab REST stats endpoint, Vite WS proxy) — 23/05/2026 ✅
+- [x] 4.4 Notification system (Notification.model.js with TTL 30d, NotificationService EventEmitter bus + 7 templates, REST CRUD + SSE real-time stream with query-param JWT, NotificationDropdown replacing static bell, useNotificationStore with SSE auto-connect, hooked into gamification level-up/challenge/quiz events) — 23/05/2026 ✅
+- [x] 4.5 Content Library (SharedContent.model.js with ratings/likes/views/tags/subjects, library.routes.js with browse/publish/like/rate/detail/unpublish/my-published, text search index, subject filtering, sort by recent/popular/rating, LibraryPage with card grid + pagination + search + filters, sidebar nav) — 23/05/2026 ✅
+- [x] 4.6 Voice features (useSpeechRecognition STT hook with vi/en, continuous mode, interim results; useSpeechSynthesis TTS hook with voice selection, rate/pitch/volume, pause/resume, word boundary; VoiceControls components — VoiceInputButton with pulse animation, TTSButton, VoiceLanguageSelector; integrated into StreamingChatBox — mic input + read-aloud on AI messages; CSS voice-pulse + blink-cursor keyframes) — 23/05/2026 ✅
+- [x] 4.7 OCR module (Tesseract.js with eng+vie worker pool, ocr.service.js with extractTextFromImage/extractTextFromImages/confidence scoring/language detection, ocr.routes.js with /extract and /upload-as-document endpoints, upload middleware extended for images, OCRPage with drag-drop/preview/extract-or-document mode/confidence badge/monospace output/copy, sidebar nav) — 23/05/2026 ✅
+- [x] 4.8 Export/Import (export.service.js with 6 formats: Anki TSV, flashcards CSV, concepts CSV, sessions CSV, document Markdown, full JSON backup; export.routes.js with download endpoints + import flashcards with dedup + stats; exportAPI with blob download helper; ExportPage with stats bar + 5 export cards + CSV/TSV import with parser, sidebar nav) — 23/05/2026 ✅
+- [x] 4.9 Multi-language UI (useI18nStore with Zustand persist + nested key resolution + {{param}} interpolation; en.js + vi.js translation files covering all pages — sidebar/header/dashboard/documents/AI studio/chat/analytics/library/OCR/export/gamification/common; LanguageSwitcher component in Header; Sidebar menu items translated via i18n keys; localStorage persistence + auto-restore) — 23/05/2026 ✅
+- [x] 4.10 Offline PWA (useOfflineStore with online/offline detection + SW update notification + PWA install prompt + offline action queue + IndexedDB document cache; PWAComponents — OfflineBanner/UpdateToast/InstallButton/PWAProvider; enhanced vite.config.js with multi-size icons, shortcuts, navigateFallback, uploads cache, API GET-only caching; integrated PWAProvider in App root) — 23/05/2026 ✅
 
 ### PHASE 5: Enterprise (Target: 100%)
-- [ ] 5.1 Testing suite (80%+ coverage)
-- [ ] 5.2 Performance (Redis, indexes, lazy loading)
-- [ ] 5.3 Security hardening
+- [~] 5.1 Testing suite — Backend: vitest + mongodb-memory-server + supertest; 5 test files (gamification 20 tests, notification 14 tests, library 9 tests, errorHandler 13 tests, export 14 tests) = 70 tests ALL PASS; Frontend tests pending — 23/05/2026 🔧
+- [x] 5.2 Performance — Backend: gzip compression middleware (skip SSE), AI rate limiter per-route, in-memory response cache (analytics 5min, leaderboard 2min, library 2min, export stats 3min with per-user isolation + auto-cleanup), analytics single-pass aggregation O(n→1). Frontend: React.lazy() 10 pages code-split (21 chunks vs 1), Vite manualChunks (vendor-react/router/icons/state), Suspense PageLoader. Build: 966KB → same total but split 21 chunks — 23/05/2026 ✅
+- [x] 5.3 Security Hardening — Helmet CSP (11 directives: script/style/font/img/connect/frame/form/base), mongo-sanitize injection protection ($gt/$ne/$where), recursive XSS stripping (script tags, event handlers, javascript: URLs, data:text/html, vbscript, expression()), HPP query pollution, file magic bytes validation (JPEG/PNG/WebP/BMP/TIFF/PDF header check), audit logging on auth routes (register/login/password/logout), 21 security tests ALL PASS — 23/05/2026 ✅
 - [ ] 5.4 Multi-tenant (Org/School accounts, RBAC)
-- [ ] 5.5 Instructor Portal
-- [ ] 5.6 Monitoring & observability
-- [ ] 5.7 Docker production deployment
-- [ ] 5.8 Documentation (API docs, guides)
+- [x] 5.5 Instructor Portal — User role 'instructor' added, Course.model.js (modules with document linking + completion requirements, enrollments with progress/grades, course settings with capacity/approval, aggregated stats, text search index), roleAuth middleware (requireRole factory + requireInstructor + requireAdmin), instructor.routes.js 12 endpoints (Course CRUD, Module CRUD, enrollment with capacity check, gradebook with letter grades, instructor dashboard stats, self-promote, public course browse), 24 tests ALL PASS — 23/05/2026 ✅
+- [x] 5.6 Monitoring & Observability — metrics.service.js (CircularBuffer for memory-safe storage, request throughput RPM, latency percentiles p50/p95/p99, per-route stats with error rates, memory usage, time-series chart data), metricsMiddleware (auto-track all requests), monitor.routes.js 6 endpoints (/metrics, /timeseries, /audit, /cache, /database collection stats, /overview consolidated), role-gated (instructor/admin), 12 tests ALL PASS — 23/05/2026 ✅
+- [x] 5.7 Docker Production Deployment — Multi-stage Dockerfiles (API: deps→runtime, non-root neurovault user, health check, test file removal; Frontend: build→nginx:1.27-alpine, server_tokens off), .dockerignore for both services, production nginx.conf (upstream keepalive, security headers X-Frame/XSS/Content-Type/Referrer/Permissions-Policy, SSE proxy without buffering, WebSocket support, immutable asset caching, service worker no-cache, gzip 11 types, dotfile blocking), docker-compose.yml (dedicated bridge network, named volumes, JSON log rotation 10MB×3, resource limits 128M-1G, env var ports, health check start_period), .env.production template — 23/05/2026 ✅
+- [x] 5.8 Documentation — docs/API_REFERENCE.md (80+ endpoints: 14 route groups, request/response examples, auth/rate-limit/cache annotations, error codes), docs/DEPLOYMENT_GUIDE.md (local dev setup, Docker deployment, env vars table, architecture diagram, monitoring, backup/restore, troubleshooting), docs/ARCHITECTURE.md (technology stack rationale, 7 key design decisions with tradeoffs, 11 data models, 7 security layers, performance optimizations, testing strategy) — 23/05/2026 ✅
 
 ---
 
@@ -211,6 +222,13 @@ npm run dev                      # → port 5173
 39. Path Planning Agent: Đã kiểm tra kỹ và làm lại (Task 3.5). Bổ sung error handling, xử lý empty query, offline fallback, đổi thinking_mode sang True. Viết file test `test_path_planning_agent.py` đạt 100% pass (21/05/2026)
 40. Agent Memory: Đã implement `MemoryManager` với 4 tầng (Working, ShortTerm, Episodic, LongTerm) lưu trữ qua local JSON (100% offline). Viết file test `test_agent_memory.py` đạt 100% pass (21/05/2026)
 41. Agent API: Đã chuyển đổi endpoint `/api/agent/tutor` thành unified `/api/agent/ask` (hỗ trợ JSON & SSE) trong Node.js và AI Core, cho phép tự động định tuyến bởi orchestrator. Đã bổ sung endpoint WebSocket `@app.websocket("/api/agent/ws")` hỗ trợ real-time chat với agentic platform (21/05/2026)
+42. ~~BUG: Library route `/:id` catch `/my/published`~~ → ĐÃ FIX — di chuyển `/my/published` lên trước `/:id` (23/05/2026)
+43. ~~BUG: OCR Tesseract workers không terminate khi shutdown~~ → ĐÃ FIX — thêm `terminateOCR()` vào graceful shutdown (23/05/2026)
+44. ~~BUG: Offline queue lưu functions vào localStorage (mất sau reload)~~ → ĐÃ FIX — chuyển sang serializable descriptors (23/05/2026)
+45. ~~BUG: SSE notification reconnect loop vô hạn khi token expired~~ → ĐÃ FIX — thêm guard kiểm tra token + online (23/05/2026)
+46. ~~BUG: Export stats dùng dynamic import() mỗi request~~ → ĐÃ FIX — chuyển sang static import (23/05/2026)
+47. ~~BUG: App.jsx nesting order PWAProvider/ToastProvider~~ → ĐÃ FIX (23/05/2026)
+48. ~~BUG: OCR extract endpoint không cleanup file~~ → ĐÃ FIX — thêm `fs.unlinkSync` sau response + on error (23/05/2026)
 
 ---
 

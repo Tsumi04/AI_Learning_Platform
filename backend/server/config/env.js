@@ -42,7 +42,7 @@ const config = {
   // ── Ollama (Local LLM) ──
   ollama: {
     url: process.env.OLLAMA_URL || 'http://127.0.0.1:11434',
-    model: process.env.LLM_MODEL || 'gemma4:e4b',
+    model: process.env.LLM_MODEL || 'qwen3:1.7b',
   },
 
   // ── Google OAuth 2.0 ──

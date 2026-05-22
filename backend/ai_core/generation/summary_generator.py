@@ -128,15 +128,29 @@ class SummaryGenerator:
         self,
         text: str,
         max_words: int = 200,
+        language: str = "en",
     ) -> Dict:
         """
         LLM-based abstractive summarization.
         Falls back to extractive if LLM unavailable.
+        Supports Vietnamese and English.
         """
         if not self.llm or not hasattr(self.llm, 'is_available') or not self.llm.is_available():
             return self.summarize(text, num_sentences=5)
 
-        prompt = f"""Summarize the following text in {max_words} words or fewer.
+        if language == "vi":
+            prompt = f"""Tóm tắt văn bản sau đây trong {max_words} từ hoặc ít hơn.
+Giữ phần tóm tắt mang tính giáo dục, rõ ràng và có cấu trúc.
+Sử dụng bullet points cho các khái niệm chính.
+Bạn PHẢI trả lời bằng TIẾNG VIỆT.
+
+Văn bản:
+{text[:3000]}
+
+Tóm tắt:"""
+            system_msg = "Bạn là chuyên gia tóm tắt. Tạo các bản tóm tắt ngắn gọn, mang tính giáo dục bằng tiếng Việt."
+        else:
+            prompt = f"""Summarize the following text in {max_words} words or fewer.
 Keep the summary educational, clear, and well-structured.
 Use bullet points for key concepts.
 
@@ -144,11 +158,12 @@ Text:
 {text[:3000]}
 
 Summary:"""
+            system_msg = "You are an expert summarizer. Create concise, educational summaries."
 
         try:
             summary = self.llm.generate(
                 prompt=prompt,
-                system="You are an expert summarizer. Create concise, educational summaries.",
+                system=system_msg,
                 temperature=0.3,
                 max_tokens=max_words * 2,
             )
