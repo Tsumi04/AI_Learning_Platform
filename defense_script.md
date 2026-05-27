@@ -551,32 +551,37 @@ Input: "học sinh giỏi"
 
 ---
 
-## IV. CANVA AI PROMPT
+## IV. CANVA AI PROMPT (MAGIC DESIGN)
 
-```
-Create a 15-slide graduation project defense presentation for "NeuroVault — AI-Driven Learning Platform".
+Bạn hãy copy chính xác đoạn text dưới đây và paste vào công cụ Canva AI (Magic Design cho Presentation):
 
-Style: Dark mode with deep navy (#0a0f1e) background. Accent colors: electric blue (#3b82f6) and emerald (#10b981). Use glassmorphism cards with subtle borders. Modern sans-serif font (Inter or similar). Clean, minimal, professional academic style.
+```text
+Tạo cho tôi một bản thuyết trình bảo vệ đồ án tốt nghiệp chuyên ngành Công nghệ thông tin gồm 15 slide về đề tài: "NeuroVault — AI-Driven Learning Platform (Nền tảng Học tập Thông minh dựa trên AI)".
 
-Slide layout guidelines:
-- Title slide: Large bold title centered, subtitle below, team info at bottom
-- Content slides: Left-aligned heading, 2-column layout where appropriate
-- Architecture slides: Use block diagrams with rounded corners and connecting arrows
-- Algorithm slides: Show mathematical formulas in clean notation with visual flow
-- Use icons for each major component (brain icon for AI, database for storage, etc.)
-- Include subtle gradient accents and thin separator lines
-- Keep text minimal — bullet points only, no paragraphs
-- Use code-style monospace font for formulas and technical terms
+YÊU CẦU THIẾT KẾ:
+- Phong cách (Style): Chuyên nghiệp, mang tính học thuật cao, tập trung vào công nghệ, gọn gàng, và hiện đại (Academic, tech-focused, clean, modern).
+- Bảng màu (Color Palette): Nền sáng (White background) kết hợp Minimalist Gray để dễ đọc. Các màu nhấn (Accent colors) là Deep Blue (xanh dương đậm) và Tech Teal (xanh lơ công nghệ).
+- Layout: Bố cục tối giản, rõ ràng. Dành không gian (white-space) để tôi có thể chèn các sơ đồ kiến trúc (block diagrams) và công thức toán học. Sử dụng font chữ hiện đại (như Inter hoặc Roboto). Không dùng quá nhiều chữ.
 
-Color coding for components:
-- Preprocessing/NLP: Blue (#3b82f6)
-- Embedding/Retrieval: Purple (#8b5cf6)
-- Knowledge Graph: Emerald (#10b981)
-- LLM/RAG: Amber (#f59e0b)
-- Adaptive Learning: Rose (#f43f5e)
-- Agent System: Cyan (#06b6d4)
+CẤU TRÚC 15 SLIDE BẮT BUỘC (Slide Titles):
+Vui lòng sử dụng chính xác các tiêu đề tiếng Anh dưới đây và tự động sinh layout phù hợp cho 3 người báo cáo:
+1. Title Slide: NeuroVault — AI-Driven Learning Platform
+2. Motivation & Problem Statement
+3. System Architecture (3-Tier Design)
+4. Data Ingestion Pipeline
+5. Vietnamese NLP Engine
+6. Local LLM Infrastructure
+7. RAG Pipeline Architecture
+8. Hybrid Retrieval & Cross-Encoder Reranking
+9. Knowledge Graph Construction
+10. Automated Quiz Generator
+11. Adaptive Learning with IRT (Item Response Theory)
+12. Spaced Repetition (FSRS v6 Algorithm)
+13. Deep Knowledge Tracer (DKT)
+14. Multi-Agent System Orchestration
+15. Demo, Limitations & Future Work
 
-Each slide should feel premium, modern, and technically sophisticated — suitable for a computer science thesis defense before an expert committee.
+Vui lòng sinh nội dung giả định (placeholder) phù hợp với lĩnh vực AI/Machine Learning cho từng slide để tôi dễ dàng điền nội dung chi tiết sau.
 ```
 
 ---
