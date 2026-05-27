@@ -1,4 +1,4 @@
-﻿# 🎤 LỜI THOẠI THUYẾT TRÌNH — NGƯỜI 3 (BẢN RÚT GỌN, DỄ NÓI)
+# 🎤 LỜI THOẠI THUYẾT TRÌNH — NGƯỜI 3 (BẢN RÚT GỌN, DỄ NÓI)
 ## Chủ đề: Adaptive Learning + Multi-Agent (Slide 11–15)
 ### Thời lượng mục tiêu: 3.5–4.5 phút
 
@@ -9,17 +9,17 @@
 > Cảm ơn bạn trước đó. Phần của em là cách hệ thống **cá nhân hóa mức độ câu hỏi** theo từng người học.
 >
 > Điểm chính nằm ở công thức Rasch 1PL:  
-> \(P(correct)=\frac{1}{1+e^{-(\theta-b)}}\).  
-> Hiểu đơn giản: nếu năng lực người học \(\theta\) cao hơn độ khó câu hỏi \(b\), xác suất đúng sẽ tăng.
+> **P(correct) = 1 / (1 + e^-(θ-b))**
+> Hiểu đơn giản: nếu năng lực người học (θ) cao hơn độ khó câu hỏi (b), xác suất đúng sẽ tăng.
 >
-> Sau mỗi câu trả lời, hệ thống cập nhật lại \(\theta\) bằng MLE (Newton-Raphson). Sau đó chọn câu hỏi tiếp theo có **độ thông tin cao nhất** theo Fisher \(I(\theta)=P(1-P)\), tức là câu hỏi vừa sức nhất tại thời điểm đó.
+> Sau mỗi câu trả lời, hệ thống cập nhật lại (θ) bằng MLE (Newton-Raphson). Sau đó chọn câu hỏi tiếp theo có **độ thông tin cao nhất** theo Fisher **I(θ) = P * (1-P)**, tức là câu hỏi vừa sức nhất tại thời điểm đó.
 >
 > Bài quiz dừng khi đủ chính xác (SE thấp hơn ngưỡng) hoặc đạt số câu tối đa.
 
 ### Code neo (để chỉ vào khi trình bày)
 - `backend/ai_core/adaptive/adaptive_quiz.py`
 - Hàm chính:
-  - `irt_probability()` — tính xác suất đúng theo \(\theta, b\)
+  - `irt_probability()` — tính xác suất đúng theo θ, b
   - `mle_ability()` — cập nhật năng lực
   - `_select_next_question()` — chọn câu có information cao nhất
 - Chi tiết dừng bài:
