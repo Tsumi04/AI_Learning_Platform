@@ -40,15 +40,20 @@ from retrieval.vector_store import VectorStore
 from retrieval.hybrid_ranker import HybridRanker
 from inference.llm_engine import LLMEngine
 from inference.rag_pipeline import RAGPipeline
+from inference.topic_tracker import TopicTracker
 from knowledge.concept_extractor import ConceptExtractor
 from knowledge.graph_builder import KnowledgeGraphBuilder
 from generation.quiz_generator import QuizGenerator
 from generation.flashcard_generator import FlashcardGenerator
 from adaptive.spaced_repetition import FSRSv6
 from adaptive.deep_knowledge_tracer import DeepKnowledgeTracer
+from adaptive.adaptive_quiz import AdaptiveQuizEngine
+from adaptive.fsrs_scheduler import FSRSScheduler
 from retrieval.cross_encoder_reranker import CrossEncoderReranker
 from generation.summary_generator import SummaryGenerator
 from learning.path_optimizer import LearningPathOptimizer
+from knowledge.cross_document import CrossDocumentEngine
+from learning.smart_notifications import SmartNotificationEngine
 from nlp.vietnamese import VietnameseNLP
 
 # ──── Lifespan (startup/shutdown) ────
@@ -88,11 +93,15 @@ graph_builder = KnowledgeGraphBuilder()
 quiz_generator = QuizGenerator()
 flashcard_generator = FlashcardGenerator()
 fsrs = FSRSv6()
+fsrs_scheduler = FSRSScheduler()
 dkt = DeepKnowledgeTracer()
 cross_encoder = CrossEncoderReranker()
 summary_generator = SummaryGenerator()
 path_optimizer = LearningPathOptimizer()
 vi_nlp = VietnameseNLP()
+topic_trackers: Dict[str, TopicTracker] = {}  # doc_id → TopicTracker
+cross_doc_engine = CrossDocumentEngine(similarity_threshold=0.85)
+smart_notif_engine = SmartNotificationEngine()
 
 # LLM Engine (connects to local Ollama)
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://127.0.0.1:11434")
@@ -218,6 +227,26 @@ class ReviewRequest(BaseModel):
     difficulty: float
     elapsed_days: float
     review_count: int
+
+class AdaptiveQuizStartRequest(BaseModel):
+    document_id: str
+    learner_id: str = "default"
+    max_questions: int = 15
+
+class AdaptiveQuizAnswerRequest(BaseModel):
+    session_id: str
+    answer: str
+    response_time_ms: Optional[int] = None
+
+class FlashcardReviewRequest(BaseModel):
+    document_id: str
+    card_id: str
+    rating: int  # 1=Again, 2=Hard, 3=Good, 4=Easy
+
+class FlashcardDueRequest(BaseModel):
+    document_id: str
+    max_new: int = 10
+    max_review: int = 50
 
 class ProcessResponse(BaseModel):
     document_id: str
@@ -415,10 +444,18 @@ def chat_with_document(request: ChatRequest):
         chat_history=request.chat_history,
     )
 
+    # Track topic for context-awareness (Phase 2 — Task 2.3)
+    if doc_id not in topic_trackers:
+        topic_trackers[doc_id] = TopicTracker()
+    topic_info = topic_trackers[doc_id].update(request.query, result.get("answer", ""))
+
     return {
         "answer": result["answer"],
         "sources": result["sources"],
         "query": result["query"],
+        "reformulated_query": result.get("reformulated_query"),
+        "grounding": result.get("grounding"),
+        "topic": topic_info,
         "document_id": doc_id,
     }
 
@@ -442,15 +479,20 @@ def chat_stream(request: ChatRequest):
     )
     rag.chunk_texts = {c["chunk_id"]: c["text"] for c in store["chunks"]}
 
-    # Retrieve context
-    retrieved = rag.retrieve(request.query, top_k=5)
+    # Smart Query Reformulation — resolve pronouns/references
+    query_lang = rag.detect_query_language(request.query)
+    refined_query = rag.reformulator.reformulate(
+        query=request.query,
+        chat_history=request.chat_history or [],
+        language=query_lang,
+    )
+    retrieved = rag.retrieve(refined_query, top_k=5)
     context_parts = []
     for i, r in enumerate(retrieved):
         context_parts.append(f"[Passage {i+1} | {r['chunk_id']}]\n{r['text']}")
     context = "\n\n---\n\n".join(context_parts)
 
-    # Detect query language — respond in the language the user used
-    query_lang = rag.detect_query_language(request.query)
+    # query_lang already detected above for reformulation
 
     # Build messages for LLM — match query language
     if query_lang == "vi":
@@ -490,7 +532,7 @@ def chat_stream(request: ChatRequest):
 
 @app.post("/api/knowledge-graph")
 def build_knowledge_graph(request: ProcessRequest):
-    """Build knowledge graph from document chunks."""
+    """Build knowledge graph from document chunks (v3: LLM-verified + communities)."""
     doc_id = request.document_id
     
     store = get_doc_store(doc_id)
@@ -498,7 +540,11 @@ def build_knowledge_graph(request: ProcessRequest):
         raise HTTPException(status_code=404, detail="Document not indexed.")
     
     chunks = store["chunks"]
-    graph = graph_builder.build(chunks, doc_id, user_id="system")
+    # Disable LLM for Knowledge Graph Builder to prevent extreme slowdowns
+    kg_builder = KnowledgeGraphBuilder(
+        llm_engine=None 
+    )
+    graph = kg_builder.build(chunks, doc_id, user_id="system")
     
     return {
         "document_id": doc_id,
@@ -518,9 +564,16 @@ def generate_quiz(request: QuizRequest):
     chunks = store["chunks"]
     language = store.get("language", "en")
     all_text = " ".join(c["text"] for c in chunks)
-    concepts = concept_extractor.extract(all_text)
+    chunk_texts = [c["text"] for c in chunks]
     
-    qgen = QuizGenerator(llm_engine=llm_engine if llm_engine.is_available() else None)
+    # Use LLM-enhanced concept extraction for quiz generation
+    llm_avail = llm_engine.is_available()
+    quiz_concept_extractor = ConceptExtractor(
+        llm_engine=llm_engine if llm_avail else None
+    )
+    concepts = quiz_concept_extractor.extract(all_text, chunks=chunk_texts)
+    
+    qgen = QuizGenerator(llm_engine=llm_engine if llm_avail else None)
     questions = qgen.generate_from_concepts(
         concepts=concepts,
         chunks=chunks,
@@ -579,6 +632,163 @@ def schedule_review(request: ReviewRequest):
             review_count=request.review_count,
         )
     return result
+
+
+# ──── Adaptive Quiz API (Phase 2 — Task 2.1) ────
+
+# Lazy-init: create engine when first needed (after llm_engine is ready)
+_adaptive_engine: Optional[AdaptiveQuizEngine] = None
+
+def _get_adaptive_engine() -> AdaptiveQuizEngine:
+    global _adaptive_engine
+    if _adaptive_engine is None:
+        qgen = QuizGenerator(llm_engine=llm_engine if llm_engine.is_available() else None)
+        _adaptive_engine = AdaptiveQuizEngine(quiz_generator=qgen, dkt=dkt)
+    return _adaptive_engine
+
+
+@app.post("/api/adaptive-quiz/start")
+def adaptive_quiz_start(request: AdaptiveQuizStartRequest):
+    """Start an adaptive quiz session with IRT-based difficulty adjustment."""
+    store = get_doc_store(request.document_id)
+    if not store:
+        raise HTTPException(status_code=404, detail="Document not indexed.")
+
+    chunks = store["chunks"]
+    language = store.get("language", "en")
+    all_text = " ".join(c["text"] for c in chunks)
+    chunk_texts = [c["text"] for c in chunks]
+    # Use LLM-enhanced concept extraction for adaptive quiz
+    adaptive_concept_extractor = ConceptExtractor(
+        llm_engine=llm_engine if llm_engine.is_available() else None
+    )
+    concepts = adaptive_concept_extractor.extract(all_text, chunks=chunk_texts)
+
+    engine = _get_adaptive_engine()
+    import uuid
+    session_id = str(uuid.uuid4())[:8]
+
+    result = engine.create_session(
+        session_id=session_id,
+        document_id=request.document_id,
+        concepts=concepts,
+        chunks=chunks,
+        learner_id=request.learner_id,
+        language=language,
+        max_questions=request.max_questions,
+    )
+
+    return result
+
+
+@app.post("/api/adaptive-quiz/answer")
+def adaptive_quiz_answer(request: AdaptiveQuizAnswerRequest):
+    """Submit an answer to adaptive quiz and get next question or results."""
+    engine = _get_adaptive_engine()
+    result = engine.submit_answer(
+        session_id=request.session_id,
+        answer=request.answer,
+        response_time_ms=request.response_time_ms,
+    )
+    if "error" in result:
+        raise HTTPException(status_code=404, detail=result["error"])
+    return result
+
+
+@app.get("/api/adaptive-quiz/status/{session_id}")
+def adaptive_quiz_status(session_id: str):
+    """Get adaptive quiz session status."""
+    engine = _get_adaptive_engine()
+    status = engine.get_session_status(session_id)
+    if not status:
+        raise HTTPException(status_code=404, detail="Session not found")
+    return status
+
+
+# ──── FSRS Scheduler API (Phase 2 — Task 2.2) ────
+
+@app.post("/api/flashcards/due")
+def get_due_flashcards(request: FlashcardDueRequest):
+    """Get flashcards due for review, prioritized by urgency."""
+    store = get_doc_store(request.document_id)
+    if not store:
+        raise HTTPException(status_code=404, detail="Document not indexed.")
+
+    chunks = store["chunks"]
+    language = store.get("language", "en")
+    all_text = " ".join(c["text"] for c in chunks)
+    concepts = concept_extractor.extract(all_text)
+
+    # Generate flashcards (or get cached ones)
+    fgen = FlashcardGenerator(llm_engine=llm_engine if llm_engine.is_available() else None)
+    cards = fgen.generate(concepts=concepts, chunks=chunks, language=language)
+
+    # Get due cards via scheduler
+    due = fsrs_scheduler.get_due_cards(
+        cards=cards,
+        max_new=request.max_new,
+        max_review=request.max_review,
+    )
+
+    return {
+        "document_id": request.document_id,
+        "due_cards": due,
+        "total_due": len(due),
+        "stats": fsrs_scheduler.get_session_stats(cards),
+    }
+
+
+@app.post("/api/flashcards/review")
+def review_flashcard(request: FlashcardReviewRequest):
+    """Process a flashcard review and update its schedule."""
+    store = get_doc_store(request.document_id)
+    if not store:
+        raise HTTPException(status_code=404, detail="Document not indexed.")
+
+    chunks = store["chunks"]
+    language = store.get("language", "en")
+    all_text = " ".join(c["text"] for c in chunks)
+    concepts = concept_extractor.extract(all_text)
+
+    fgen = FlashcardGenerator(llm_engine=llm_engine if llm_engine.is_available() else None)
+    cards = fgen.generate(concepts=concepts, chunks=chunks, language=language)
+
+    result = fsrs_scheduler.review_card(
+        card_id=request.card_id,
+        rating=request.rating,
+        cards=cards,
+    )
+
+    if not result:
+        raise HTTPException(status_code=404, detail="Card not found")
+
+    return {
+        "card_id": request.card_id,
+        "schedule": result,
+        "daily_recommendation": fsrs_scheduler.get_optimal_daily_load(cards),
+    }
+
+
+@app.get("/api/flashcards/stats/{document_id}")
+def flashcard_stats(document_id: str):
+    """Get flashcard deck statistics and daily recommendations."""
+    store = get_doc_store(document_id)
+    if not store:
+        raise HTTPException(status_code=404, detail="Document not indexed.")
+
+    chunks = store["chunks"]
+    language = store.get("language", "en")
+    all_text = " ".join(c["text"] for c in chunks)
+    concepts = concept_extractor.extract(all_text)
+
+    fgen = FlashcardGenerator(llm_engine=llm_engine if llm_engine.is_available() else None)
+    cards = fgen.generate(concepts=concepts, chunks=chunks, language=language)
+
+    return {
+        "document_id": document_id,
+        "stats": fsrs_scheduler.get_session_stats(cards),
+        "daily_recommendation": fsrs_scheduler.get_optimal_daily_load(cards),
+    }
 
 
 @app.get("/api/concepts/{document_id}")
@@ -942,30 +1152,167 @@ def agent_status():
     return agent_orchestrator.get_status()
 
 
+# ──── Phase 5: Cross-Document Knowledge ────
+
+class CrossDocRequest(BaseModel):
+    document_ids: List[str]
+
+
+@app.post("/api/cross-document/merge")
+def merge_document_graphs(request: CrossDocRequest):
+    """Merge knowledge graphs from multiple documents into unified graph."""
+    engine = CrossDocumentEngine(similarity_threshold=0.85)
+    added_docs = 0
+
+    for doc_id in request.document_ids:
+        store = get_doc_store(doc_id)
+        if not store:
+            continue
+
+        chunks = store["chunks"]
+        kg_builder = KnowledgeGraphBuilder(
+            llm_engine=llm_engine if llm_engine.is_available() else None
+        )
+        graph = kg_builder.build(chunks, doc_id, user_id="system")
+        engine.add_document_graph(doc_id, graph)
+        added_docs += 1
+
+    unified = engine.get_unified_graph()
+    cross_concepts = engine.get_cross_document_concepts()
+
+    return {
+        "documents_merged": added_docs,
+        "graph": unified,
+        "cross_document_concepts": cross_concepts,
+    }
+
+
+@app.post("/api/cross-document/related")
+def find_related_documents(request: ProcessRequest):
+    """Find documents related to a given document by concept overlap."""
+    doc_id = request.document_id
+
+    # Ensure this doc's graph is indexed
+    store = get_doc_store(doc_id)
+    if not store:
+        raise HTTPException(status_code=404, detail="Document not indexed.")
+
+    chunks = store["chunks"]
+    graph = graph_builder.build(chunks, doc_id, user_id="system")
+    cross_doc_engine.add_document_graph(doc_id, graph)
+
+    # Also index all other loaded documents
+    for other_id, other_store in doc_stores.items():
+        if other_id != doc_id and other_id not in cross_doc_engine.doc_graphs:
+            other_chunks = other_store["chunks"]
+            other_graph = graph_builder.build(other_chunks, other_id, user_id="system")
+            cross_doc_engine.add_document_graph(other_id, other_graph)
+
+    related = cross_doc_engine.get_related_documents(doc_id)
+
+    return {
+        "document_id": doc_id,
+        "related_documents": related,
+    }
+
+
+# ──── Phase 5: Smart Notifications ────
+
+class NotificationCheckRequest(BaseModel):
+    user_id: str
+    flashcard_states: Optional[List[Dict]] = None
+    concept_mastery: Optional[List[Dict]] = None
+    streak: Optional[Dict] = None
+    recent_sessions: Optional[List[Dict]] = None
+    stats: Optional[Dict] = None
+
+
+@app.post("/api/smart-notifications/check")
+def check_smart_notifications(request: NotificationCheckRequest):
+    """Check learner state and generate contextual notifications."""
+    learner_state = {
+        "user_id": request.user_id,
+        "flashcard_states": request.flashcard_states or [],
+        "concept_mastery": request.concept_mastery or [],
+        "streak": request.streak or {},
+        "recent_sessions": request.recent_sessions or [],
+        "stats": request.stats or {},
+    }
+
+    notifications = smart_notif_engine.check_and_generate(learner_state)
+    digest = smart_notif_engine.generate_weekly_digest(learner_state)
+
+    return {
+        "notifications": notifications,
+        "weekly_digest": digest,
+    }
+
+
+# ──── Phase 5: Learning Path API ────
+
+class NextConceptsRequest(BaseModel):
+    document_id: str
+    learner_id: str = "default"
+    top_n: int = 5
+
+
+@app.post("/api/learning-path/next")
+def get_next_concepts(request: NextConceptsRequest):
+    """Get recommended next concepts to study."""
+    doc_id = request.document_id
+
+    store = get_doc_store(doc_id)
+    if not store:
+        raise HTTPException(status_code=404, detail="Document not indexed.")
+
+    chunks = store["chunks"]
+    graph = graph_builder.build(chunks, doc_id, request.learner_id)
+
+    mastery = {}
+    for node in graph["nodes"]:
+        mastery[node["concept"]] = dkt.predict_mastery(
+            request.learner_id, node["concept"]
+        )
+
+    recommendations = path_optimizer.get_next_concepts(
+        concepts=graph["nodes"],
+        edges=graph["edges"],
+        mastery=mastery,
+        n=request.top_n,
+    )
+
+    return {
+        "document_id": doc_id,
+        "learner_id": request.learner_id,
+        "recommendations": recommendations,
+    }
+
 
 # ──── Run ────
 if __name__ == "__main__":
     import uvicorn
     print(f"""
 ======================================================
-     NEUROVAULT AI Core v5.2 — Phase 3 Agentic AI
+     NEUROVAULT AI Core v6.0 — Phase 5 Ecosystem
      Running on port 8000
      100% Local — White-Box AI
      Model: {llm_engine.model}
 
-     Modules (v2):
+     Modules:
        - Document Processing Pipeline
        - Embedding Engine v2 (Truncated SVD)
        - BM25 + Vector + Cross-Encoder Retrieval
-       - RAG Pipeline v2 (Qwen3 / Ollama)
+       - RAG Pipeline v4 (Answer Grounding)
        - Streaming SSE Chat
-       - Knowledge Graph v2 (PageRank + Relations)
-       - Quiz Generator v2 (Bloom's Taxonomy)
+       - Knowledge Graph v3 (LLM-verified + Communities)
+       - Quiz Generator v4 (LLM-First + Adaptive IRT)
        - Flashcard Generator v2 (FSRS metadata)
        - Summary Generator v2 (TextRank + MMR)
-       - FSRS v6 (17 weights)
+       - FSRS v6 (17 weights + Priority Scheduler)
        - Deep Knowledge Tracing v2
        - Learning Path Optimizer (ZPD)
+       - Cross-Document Knowledge Engine
+       - Smart Notification Engine
        - Vietnamese NLP (500+ stopwords)
        - Data Persistence (pickle/disk)
        - BPE Tokenizer (white-box)

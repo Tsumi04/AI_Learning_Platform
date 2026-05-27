@@ -10,6 +10,7 @@ import setupGoogleAuth from './config/passport.js';
 import { generalLimiter, aiLimiter } from './middleware/rateLimiter.js';
 import { sanitizeInput, sanitizeXSS } from './middleware/security.js';
 import errorHandler from './middleware/errorHandler.js';
+import devAuth from './middleware/devAuth.js';
 import { setupCollaborationWS, getCollabStats } from './collaboration.js';
 
 // Routes
@@ -93,7 +94,7 @@ app.use(cors({
   ].filter(Boolean),
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Dev-Bypass'],
   exposedHeaders: ['X-Request-Id'],
 }));
 
@@ -217,6 +218,11 @@ app.get('/api/health', async (req, res) => {
     ],
   });
 });
+
+// ──────────────────────────────────────────────
+// Dev Auth Bypass (development only)
+// ──────────────────────────────────────────────
+app.use('/api/', devAuth);
 
 // ──────────────────────────────────────────────
 // API Routes

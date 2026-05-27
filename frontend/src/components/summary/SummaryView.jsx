@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { FileText, Loader2, RotateCcw, Sparkles, Copy, Check, BookMarked } from 'lucide-react';
 import { aiAPI } from '../../services/api';
+import MarkdownRenderer from '../shared/MarkdownRenderer';
 
 /**
  * SummaryView — AI Document Summarization
@@ -210,10 +211,9 @@ export default function SummaryView({ documentId }) {
         fontSize: '0.9375rem',
         lineHeight: 1.8,
         color: 'var(--c-text-primary)',
-        whiteSpace: 'pre-wrap',
         marginBottom: 'var(--space-xl)',
       }}>
-        {result?.summary || 'Không có kết quả.'}
+        <MarkdownRenderer content={result?.summary || 'Không có kết quả.'} />
       </div>
 
       {/* Keywords */}

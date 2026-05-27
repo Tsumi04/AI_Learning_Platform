@@ -6,6 +6,9 @@
 
 const API_BASE = '/api';
 
+// ──── Dev Auth Bypass (must match App.jsx DEV_BYPASS_AUTH) ────
+const DEV_BYPASS_AUTH = import.meta.env.DEV;
+
 // ──── Token Management ────
 let accessToken = localStorage.getItem('neurovault_access_token');
 let refreshTokenValue = localStorage.getItem('neurovault_refresh_token');
@@ -28,6 +31,20 @@ export const clearTokens = () => {
 
 export const getAccessToken = () => accessToken;
 
+/**
+ * Build auth headers for direct fetch calls (outside fetchAPI).
+ * Includes dev bypass header when DEV_BYPASS_AUTH is active.
+ */
+export function _buildAuthHeaders(extra = {}) {
+  const headers = { ...extra };
+  if (DEV_BYPASS_AUTH) {
+    headers['X-Dev-Bypass'] = 'true';
+  } else if (accessToken) {
+    headers['Authorization'] = `Bearer ${accessToken}`;
+  }
+  return headers;
+}
+
 // ──── Core Fetch Wrapper ────
 
 async function fetchAPI(path, options = {}) {
@@ -41,8 +58,10 @@ async function fetchAPI(path, options = {}) {
     headers['Content-Type'] = 'application/json';
   }
 
-  // Attach auth token
-  if (accessToken) {
+  // Attach auth token OR dev bypass header
+  if (DEV_BYPASS_AUTH) {
+    headers['X-Dev-Bypass'] = 'true';
+  } else if (accessToken) {
     headers['Authorization'] = `Bearer ${accessToken}`;
   }
 
@@ -153,10 +172,7 @@ export const documentsAPI = {
    */
   getFileBlob: async (id) => {
     const url = `${API_BASE}/documents/${id}/file`;
-    const headers = {};
-    if (accessToken) {
-      headers['Authorization'] = `Bearer ${accessToken}`;
-    }
+    const headers = _buildAuthHeaders();
     const response = await fetch(url, { headers });
     if (!response.ok) {
       throw new Error(`Failed to load file: HTTP ${response.status}`);
@@ -278,6 +294,62 @@ export const aiAPI = {
       }),
     }),
 
+  // ── Adaptive Quiz (Phase 2) ──
+
+  /** Start an adaptive quiz session */
+  startAdaptiveQuiz: (documentId, learnerId = 'default', maxQuestions = 15) =>
+    fetchAPI('/ai/adaptive-quiz/start', {
+      method: 'POST',
+      body: JSON.stringify({
+        document_id: documentId,
+        learner_id: learnerId,
+        max_questions: maxQuestions,
+      }),
+    }),
+
+  /** Submit answer to adaptive quiz */
+  submitAdaptiveAnswer: (sessionId, answer, responseTimeMs = null) =>
+    fetchAPI('/ai/adaptive-quiz/answer', {
+      method: 'POST',
+      body: JSON.stringify({
+        session_id: sessionId,
+        answer,
+        response_time_ms: responseTimeMs,
+      }),
+    }),
+
+  /** Get adaptive quiz session status */
+  getAdaptiveQuizStatus: (sessionId) =>
+    fetchAPI(`/ai/adaptive-quiz/status/${sessionId}`),
+
+  // ── Smart Flashcard Scheduler (Phase 2) ──
+
+  /** Get due flashcards with priority ordering */
+  getDueFlashcards: (documentId, maxNew = 10, maxReview = 50) =>
+    fetchAPI('/ai/flashcards/due', {
+      method: 'POST',
+      body: JSON.stringify({
+        document_id: documentId,
+        max_new: maxNew,
+        max_review: maxReview,
+      }),
+    }),
+
+  /** Process flashcard review with FSRS */
+  reviewFlashcard: (documentId, cardId, rating) =>
+    fetchAPI('/ai/flashcards/review', {
+      method: 'POST',
+      body: JSON.stringify({
+        document_id: documentId,
+        card_id: cardId,
+        rating,
+      }),
+    }),
+
+  /** Get flashcard deck stats */
+  getFlashcardStats: (documentId) =>
+    fetchAPI(`/ai/flashcards/stats/${documentId}`),
+
   /**
    * Generate summary from document
    * @param {string} documentId - Document ID
@@ -309,6 +381,55 @@ export const aiAPI = {
       };
     }
   },
+
+  // ── Phase 5: Cross-Document Knowledge ──
+
+  /** Merge knowledge graphs from multiple documents */
+  mergeDocumentGraphs: (documentIds) =>
+    fetchAPI('/ai/cross-document/merge', {
+      method: 'POST',
+      body: JSON.stringify({ document_ids: documentIds }),
+    }),
+
+  /** Find documents related by concept overlap */
+  findRelatedDocuments: (documentId) =>
+    fetchAPI('/ai/cross-document/related', {
+      method: 'POST',
+      body: JSON.stringify({ document_id: documentId }),
+    }),
+
+  // ── Phase 5: Smart Notifications ──
+
+  /** Check for smart learning notifications */
+  checkSmartNotifications: (learnerState) =>
+    fetchAPI('/ai/smart-notifications/check', {
+      method: 'POST',
+      body: JSON.stringify(learnerState),
+    }),
+
+  // ── Phase 5: Learning Path ──
+
+  /** Get recommended next concepts to study */
+  getNextConcepts: (documentId, learnerId = 'default', topN = 5) =>
+    fetchAPI('/ai/learning-path/next', {
+      method: 'POST',
+      body: JSON.stringify({
+        document_id: documentId,
+        learner_id: learnerId,
+        top_n: topN,
+      }),
+    }),
+
+  /** Generate daily study plan */
+  getStudyPlan: (documentId, learnerId = 'default', days = 7) =>
+    fetchAPI('/ai/study-plan', {
+      method: 'POST',
+      body: JSON.stringify({
+        document_id: documentId,
+        learner_id: learnerId,
+        days,
+      }),
+    }),
 };
 
 // ──── Learning API ────
@@ -359,10 +480,7 @@ export const learningAPI = {
    */
   exportData: async () => {
     const url = `${API_BASE}/learning/export-data`;
-    const headers = {};
-    if (accessToken) {
-      headers['Authorization'] = `Bearer ${accessToken}`;
-    }
+    const headers = _buildAuthHeaders();
     const response = await fetch(url, { headers });
     if (!response.ok) throw new Error('Export failed');
     const blob = await response.blob();
@@ -543,10 +661,9 @@ export const ocrAPI = {
   extract: async (file) => {
     const formData = new FormData();
     formData.append('file', file);
-    const token = getAccessToken();
-    const res = await fetch(`${API_BASE_URL}/ocr/extract`, {
+    const res = await fetch(`${API_BASE}/ocr/extract`, {
       method: 'POST',
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      headers: _buildAuthHeaders(),
       body: formData,
     });
     if (!res.ok) throw new Error((await res.json()).error || `HTTP ${res.status}`);
@@ -557,10 +674,9 @@ export const ocrAPI = {
     const formData = new FormData();
     formData.append('file', file);
     if (title) formData.append('title', title);
-    const token = getAccessToken();
-    const res = await fetch(`${API_BASE_URL}/ocr/upload-as-document`, {
+    const res = await fetch(`${API_BASE}/ocr/upload-as-document`, {
       method: 'POST',
-      headers: token ? { Authorization: `Bearer ${token}` } : {},
+      headers: _buildAuthHeaders(),
       body: formData,
     });
     if (!res.ok) throw new Error((await res.json()).error || `HTTP ${res.status}`);
@@ -597,9 +713,8 @@ export const exportAPI = {
 };
 
 async function _downloadFile(path) {
-  const token = getAccessToken();
-  const res = await fetch(`${API_BASE_URL}${path}`, {
-    headers: token ? { Authorization: `Bearer ${token}` } : {},
+  const res = await fetch(`${API_BASE}${path}`, {
+    headers: _buildAuthHeaders(),
   });
   if (!res.ok) throw new Error(`Download failed: ${res.status}`);
   const blob = await res.blob();

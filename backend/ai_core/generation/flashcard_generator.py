@@ -1,8 +1,9 @@
 """
-NEUROVAULT — Flashcard Generator v2 (White-Box, Multilingual)
+NEUROVAULT — Flashcard Generator v3 (White-Box, Multilingual)
 Tự tạo flashcards từ concepts + definitions + chunks + LLM.
 
-v2 Improvements:
+v3 Improvements:
+- LLM-first definition extraction (with regex fallback)
 - LLM-powered definitions (when available)
 - Multiple card types: Concept, Cloze, Key-Value, Reverse
 - FSRS metadata integration
@@ -14,7 +15,10 @@ v2 Improvements:
 
 import re
 import hashlib
+import logging
 from typing import List, Dict, Optional
+
+logger = logging.getLogger(__name__)
 
 # Language-aware templates
 CARD_TEMPLATES = {
@@ -136,13 +140,13 @@ class FlashcardGenerator:
         return True
 
     def _concept_card(self, concept: Dict, chunks: List[Dict], lang: str = "en") -> Optional[Dict]:
-        """Create concept-definition flashcard."""
+        """Create concept-definition flashcard with LLM-first definition."""
         name = concept.get("concept", "")
         if not name or len(name) < 3:
             return None
 
-        # Find definition from chunk context
-        definition = self._extract_definition(name, chunks)
+        # LLM-first definition extraction, then regex fallback
+        definition = self._extract_definition_smart(name, chunks, lang)
         if not definition:
             return None
 
@@ -243,7 +247,7 @@ class FlashcardGenerator:
         return cards[:5]
 
     def _extract_definition(self, concept: str, chunks: List[Dict]) -> Optional[str]:
-        """Find best definition from chunks."""
+        """Find best definition from chunks using regex heuristics (fallback)."""
         best = None
         best_score = 0
 
@@ -259,11 +263,73 @@ class FlashcardGenerator:
                     score = len(sent.strip())
                     if any(kw in sent.lower() for kw in ['is', 'are', 'refers', 'defined', 'means', 'là', 'được định nghĩa', 'có nghĩa']):
                         score *= 2
+                    # Bonus for sentences where concept appears near the start
+                    concept_pos = sent.lower().find(concept.lower())
+                    if concept_pos >= 0 and concept_pos < len(sent) * 0.3:
+                        score *= 1.5
                     if score > best_score:
                         best_score = score
                         best = sent.strip()
 
         return best
+
+    def _extract_definition_smart(self, concept: str, chunks: List[Dict], lang: str = "en") -> Optional[str]:
+        """
+        Smart definition extraction: LLM-first, regex fallback.
+
+        Strategy:
+        1. Find relevant chunks containing the concept
+        2. If LLM available: ask LLM to create a clear definition from context
+        3. Validate LLM output (not too short, not a refusal)
+        4. Fallback to regex-based _extract_definition
+        """
+        # Step 1: Find relevant context
+        relevant_chunks = []
+        for chunk in chunks:
+            if concept.lower() in chunk.get("text", "").lower():
+                relevant_chunks.append(chunk)
+        if not relevant_chunks:
+            return None
+
+        context = "\n".join(c["text"][:300] for c in relevant_chunks[:3])
+
+        # Step 2: Try LLM definition
+        if self.llm and hasattr(self.llm, 'is_available') and self.llm.is_available():
+            try:
+                if lang == "vi":
+                    prompt = (
+                        f"Dựa trên văn bản dưới đây, hãy định nghĩa '{concept}' trong 1-2 câu rõ ràng "
+                        f"phù hợp cho flashcard học tập.\n\n"
+                        f"Văn bản: {context}\n\n"
+                        f"Định nghĩa của '{concept}':"
+                    )
+                else:
+                    prompt = (
+                        f"Based on the text below, define '{concept}' in 1-2 clear sentences "
+                        f"suitable for a study flashcard.\n\n"
+                        f"Text: {context}\n\n"
+                        f"Definition of '{concept}':"
+                    )
+
+                result = self.llm.generate(
+                    prompt=prompt,
+                    system="You write concise definitions for study flashcards. Return only the definition.",
+                    temperature=0.3,
+                    max_tokens=150,
+                )
+
+                if (result
+                    and not result.startswith("[ERROR]")
+                    and len(result.strip()) > 15
+                    and not any(w in result.lower() for w in ['i cannot', "i can't", 'sorry', 'không thể'])):
+                    logger.info(f"[Flashcard] LLM definition for '{concept}': {result[:60]}...")
+                    return result.strip()[:400]
+
+            except Exception as e:
+                logger.warning(f"[Flashcard] LLM definition failed for '{concept}': {e}")
+
+        # Step 3: Fallback to regex
+        return self._extract_definition(concept, chunks)
 
     def _estimate_difficulty(self, card: Dict) -> float:
         """Estimate card difficulty based on content complexity."""

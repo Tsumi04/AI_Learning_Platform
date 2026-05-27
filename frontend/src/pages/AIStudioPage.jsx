@@ -165,6 +165,8 @@ export default function AIStudioPage() {
   const activeTabConfig = AI_TABS.find(t => t.id === activeTab);
 
   // ── Render tab content ──
+  // Render ALL tabs simultaneously, hide inactive with display:none
+  // This preserves component state (chat history, quiz progress, etc.) across tab switches
   const renderContent = () => {
     if (!selectedDoc) {
       return (
@@ -187,26 +189,25 @@ export default function AIStudioPage() {
       );
     }
 
-    switch (activeTab) {
-      case 'chat':
-        return (
-          <StreamingChatBox
-            key={selectedDoc._id}
-            documentId={selectedDoc._id}
-            documentTitle={selectedDoc.title}
-          />
-        );
-      case 'quiz':
-        return <QuizView key={selectedDoc._id} documentId={selectedDoc._id} />;
-      case 'flashcards':
-        return <FlashcardView key={selectedDoc._id} documentId={selectedDoc._id} />;
-      case 'knowledge-graph':
-        return <KnowledgeGraphView key={selectedDoc._id} documentId={selectedDoc._id} />;
-      case 'summary':
-        return <SummaryView key={selectedDoc._id} documentId={selectedDoc._id} />;
-      default:
-        return null;
-    }
+    return (
+      <>
+        <div style={{ display: activeTab === 'chat' ? 'flex' : 'none', flex: 1, minHeight: 0, flexDirection: 'column' }}>
+          <StreamingChatBox documentId={selectedDoc._id} documentTitle={selectedDoc.title} />
+        </div>
+        <div style={{ display: activeTab === 'quiz' ? 'flex' : 'none', flex: 1, minHeight: 0, flexDirection: 'column' }}>
+          <QuizView documentId={selectedDoc._id} />
+        </div>
+        <div style={{ display: activeTab === 'flashcards' ? 'flex' : 'none', flex: 1, minHeight: 0, flexDirection: 'column' }}>
+          <FlashcardView documentId={selectedDoc._id} />
+        </div>
+        <div style={{ display: activeTab === 'knowledge-graph' ? 'flex' : 'none', flex: 1, minHeight: 0, flexDirection: 'column' }}>
+          <KnowledgeGraphView documentId={selectedDoc._id} />
+        </div>
+        <div style={{ display: activeTab === 'summary' ? 'flex' : 'none', flex: 1, minHeight: 0, flexDirection: 'column' }}>
+          <SummaryView documentId={selectedDoc._id} />
+        </div>
+      </>
+    );
   };
 
   return (

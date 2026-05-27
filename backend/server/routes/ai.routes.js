@@ -230,7 +230,7 @@ router.post('/quiz', auth, checkAICoreAvailable, async (req, res, next) => {
       num_questions: Math.min(Math.max(num_questions, 1), 50),
       difficulty: Math.min(Math.max(difficulty, 0), 1),
       question_types,
-    }, 60000);
+    }, 300000); // Increased timeout to 5 minutes
 
     res.json(response.data);
   } catch (err) {
@@ -261,7 +261,7 @@ router.post('/flashcards', auth, checkAICoreAvailable, async (req, res, next) =>
     const response = await proxyToAICore('post', '/api/flashcards', {
       document_id,
       max_cards: Math.min(Math.max(max_cards, 1), 100),
-    }, 60000);
+    }, 300000); // Increased timeout to 5 minutes
 
     res.json(response.data);
   } catch (err) {
@@ -292,7 +292,7 @@ router.post('/knowledge-graph', auth, checkAICoreAvailable, async (req, res, nex
     const response = await proxyToAICore('post', '/api/knowledge-graph', {
       document_id,
       file_path: '',
-    }, 60000);
+    }, 300000); // Increased timeout to 5 minutes for Knowledge Graph
 
     res.json(response.data);
   } catch (err) {
@@ -527,4 +527,232 @@ router.get('/agent/status', async (req, res) => {
   }
 });
 
+// ──────────────────────────────────────────────
+// Phase 2: Adaptive Quiz
+// ──────────────────────────────────────────────
+
+/**
+ * POST /api/ai/adaptive-quiz/start
+ * Start an adaptive IRT quiz session
+ */
+router.post('/adaptive-quiz/start', auth, checkAICoreAvailable, async (req, res, next) => {
+  try {
+    const { document_id, learner_id = 'default', max_questions = 15 } = req.body;
+
+    if (!document_id) {
+      return res.status(400).json({ error: 'document_id is required.', code: 'MISSING_PARAMS' });
+    }
+
+    const response = await proxyToAICore('post', '/api/adaptive-quiz/start', {
+      document_id,
+      learner_id,
+      max_questions: Math.min(Math.max(max_questions, 3), 50),
+    }, 300000); // Increased timeout to 5 minutes
+
+    res.json(response.data);
+  } catch (err) {
+    if (err.response) return res.status(err.response.status).json(err.response.data);
+    next(err);
+  }
+});
+
+/**
+ * POST /api/ai/adaptive-quiz/answer
+ * Submit answer to adaptive quiz
+ */
+router.post('/adaptive-quiz/answer', auth, async (req, res, next) => {
+  try {
+    const { session_id, answer } = req.body;
+
+    if (!session_id) {
+      return res.status(400).json({ error: 'session_id is required.', code: 'MISSING_PARAMS' });
+    }
+
+    const response = await proxyToAICore('post', '/api/adaptive-quiz/answer', req.body, 30000);
+    res.json(response.data);
+  } catch (err) {
+    if (err.response) return res.status(err.response.status).json(err.response.data);
+    next(err);
+  }
+});
+
+/**
+ * GET /api/ai/adaptive-quiz/status/:sessionId
+ * Get adaptive quiz session status
+ */
+router.get('/adaptive-quiz/status/:sessionId', auth, async (req, res, next) => {
+  try {
+    const response = await proxyToAICore('get', `/api/adaptive-quiz/status/${req.params.sessionId}`);
+    res.json(response.data);
+  } catch (err) {
+    if (err.response) return res.status(err.response.status).json(err.response.data);
+    next(err);
+  }
+});
+
+// ──────────────────────────────────────────────
+// Phase 2: Smart Flashcard Scheduler
+// ──────────────────────────────────────────────
+
+/**
+ * POST /api/ai/flashcards/due
+ * Get due flashcards with priority ordering
+ */
+router.post('/flashcards/due', auth, checkAICoreAvailable, async (req, res, next) => {
+  try {
+    const { document_id } = req.body;
+
+    if (!document_id) {
+      return res.status(400).json({ error: 'document_id is required.', code: 'MISSING_PARAMS' });
+    }
+
+    const response = await proxyToAICore('post', '/api/flashcards/due', req.body, 300000);
+    res.json(response.data);
+  } catch (err) {
+    if (err.response) return res.status(err.response.status).json(err.response.data);
+    next(err);
+  }
+});
+
+/**
+ * POST /api/ai/flashcards/review
+ * Process flashcard review with FSRS
+ */
+router.post('/flashcards/review', auth, async (req, res, next) => {
+  try {
+    const { document_id, card_id, rating } = req.body;
+
+    if (!document_id || !card_id || !rating) {
+      return res.status(400).json({ error: 'document_id, card_id, and rating are required.', code: 'MISSING_PARAMS' });
+    }
+
+    const response = await proxyToAICore('post', '/api/flashcards/review', req.body, 30000);
+    res.json(response.data);
+  } catch (err) {
+    if (err.response) return res.status(err.response.status).json(err.response.data);
+    next(err);
+  }
+});
+
+/**
+ * GET /api/ai/flashcards/stats/:documentId
+ * Get flashcard deck statistics
+ */
+router.get('/flashcards/stats/:documentId', auth, async (req, res, next) => {
+  try {
+    const response = await proxyToAICore('get', `/api/flashcards/stats/${req.params.documentId}`);
+    res.json(response.data);
+  } catch (err) {
+    if (err.response) return res.status(err.response.status).json(err.response.data);
+    next(err);
+  }
+});
+
+// ──────────────────────────────────────────────
+// Phase 5: Cross-Document Knowledge
+// ──────────────────────────────────────────────
+
+/**
+ * POST /api/ai/cross-document/merge
+ * Merge knowledge graphs from multiple documents
+ */
+router.post('/cross-document/merge', auth, checkAICoreAvailable, async (req, res, next) => {
+  try {
+    const { document_ids } = req.body;
+
+    if (!document_ids || !Array.isArray(document_ids) || document_ids.length < 2) {
+      return res.status(400).json({ error: 'document_ids must be an array with at least 2 IDs.', code: 'INVALID_PARAMS' });
+    }
+
+    const response = await proxyToAICore('post', '/api/cross-document/merge', req.body, 120000);
+    res.json(response.data);
+  } catch (err) {
+    if (err.response) return res.status(err.response.status).json(err.response.data);
+    next(err);
+  }
+});
+
+/**
+ * POST /api/ai/cross-document/related
+ * Find related documents by concept overlap
+ */
+router.post('/cross-document/related', auth, checkAICoreAvailable, async (req, res, next) => {
+  try {
+    const { document_id } = req.body;
+
+    if (!document_id) {
+      return res.status(400).json({ error: 'document_id is required.', code: 'MISSING_PARAMS' });
+    }
+
+    const response = await proxyToAICore('post', '/api/cross-document/related', req.body, 60000);
+    res.json(response.data);
+  } catch (err) {
+    if (err.response) return res.status(err.response.status).json(err.response.data);
+    next(err);
+  }
+});
+
+// ──────────────────────────────────────────────
+// Phase 5: Smart Notifications
+// ──────────────────────────────────────────────
+
+/**
+ * POST /api/ai/smart-notifications/check
+ * Check learner state and generate contextual notifications
+ */
+router.post('/smart-notifications/check', auth, async (req, res, next) => {
+  try {
+    const response = await proxyToAICore('post', '/api/smart-notifications/check', req.body, 15000);
+    res.json(response.data);
+  } catch (err) {
+    if (err.response) return res.status(err.response.status).json(err.response.data);
+    next(err);
+  }
+});
+
+// ──────────────────────────────────────────────
+// Phase 5: Learning Path
+// ──────────────────────────────────────────────
+
+/**
+ * POST /api/ai/learning-path/next
+ * Get recommended next concepts to study
+ */
+router.post('/learning-path/next', auth, checkAICoreAvailable, async (req, res, next) => {
+  try {
+    const { document_id } = req.body;
+
+    if (!document_id) {
+      return res.status(400).json({ error: 'document_id is required.', code: 'MISSING_PARAMS' });
+    }
+
+    const response = await proxyToAICore('post', '/api/learning-path/next', req.body, 300000);
+    res.json(response.data);
+  } catch (err) {
+    if (err.response) return res.status(err.response.status).json(err.response.data);
+    next(err);
+  }
+});
+
+/**
+ * POST /api/ai/study-plan
+ * Generate daily study plan
+ */
+router.post('/study-plan', auth, checkAICoreAvailable, async (req, res, next) => {
+  try {
+    const { document_id } = req.body;
+
+    if (!document_id) {
+      return res.status(400).json({ error: 'document_id is required.', code: 'MISSING_PARAMS' });
+    }
+
+    const response = await proxyToAICore('post', '/api/study-plan', req.body, 300000);
+    res.json(response.data);
+  } catch (err) {
+    if (err.response) return res.status(err.response.status).json(err.response.data);
+    next(err);
+  }
+});
+
 export default router;
+

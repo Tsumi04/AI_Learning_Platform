@@ -15,7 +15,7 @@ const sharedContentSchema = new mongoose.Schema({
     ref: 'User',
     required: true,
   },
-  title: { type: String, required: true, trim: true, maxlength: 200 },
+  title: { type: String, required: true, trim: true, maxlength: 500 },
   description: { type: String, default: '', maxlength: 1000 },
   subject: {
     type: String,

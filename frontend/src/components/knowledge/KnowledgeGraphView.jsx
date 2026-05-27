@@ -8,13 +8,15 @@ import ForceEngine from './ForceEngine';
 import GraphRenderer, { getMasteryColor, NODE_PALETTE } from './GraphRenderer';
 
 /**
- * KnowledgeGraphView v2 — Force-Directed Interactive Visualizer
+ * KnowledgeGraphView v3 — Force-Directed Interactive Visualizer
  * - Barnes-Hut physics (O(n log n))
  * - High-DPI Canvas rendering
  * - Mastery color-coding (red→green)
+ * - Community cluster coloring (Label Propagation)
  * - Particle animations on edges
  * - Minimap, search, filter, neighbor highlighting
  * - Edge arrows + relation labels
+ * - LLM-verified relation badges
  */
 export default function KnowledgeGraphView({ documentId }) {
   const canvasRef = useRef(null);
@@ -33,11 +35,13 @@ export default function KnowledgeGraphView({ documentId }) {
   const [searchQuery, setSearchQuery] = useState('');
   const [showSearch, setShowSearch] = useState(false);
   const [filterMode, setFilterMode] = useState('all'); // all, high-centrality, low-mastery
+  const [edgeDensity, setEdgeDensity] = useState(3); // max edges per node
 
   const panRef = useRef({ x: 0, y: 0 });
   const dragRef = useRef({ active: false, nodeIdx: -1, ox: 0, oy: 0 });
   const panDragRef = useRef({ active: false, sx: 0, sy: 0 });
   const zoomRef = useRef(1);
+  const zoomFittedRef = useRef(false);
 
   // ── Load graph data ──
   const loadGraph = async () => {
@@ -46,6 +50,9 @@ export default function KnowledgeGraphView({ documentId }) {
       const data = await aiAPI.getKnowledgeGraph(documentId);
       if (data.graph && data.graph.nodes?.length > 0) {
         setGraphData(data.graph);
+      } else if (data.nodes?.length > 0) {
+        // Handle case where response IS the graph directly
+        setGraphData(data);
       } else {
         setError('Không tìm thấy concepts. Hãy xử lý tài liệu trước.');
       }
@@ -73,18 +80,50 @@ export default function KnowledgeGraphView({ documentId }) {
     const h = parent.clientHeight;
     engine.setSize(w, h);
     renderer.resize(w, h);
-    engine.setGraph(graphData.nodes || [], graphData.edges || []);
+    engine.setGraph(graphData.nodes || [], pruneEdges(graphData.edges || [], graphData.nodes || [], edgeDensity));
 
     // Reset view
     panRef.current = { x: 0, y: 0 };
     zoomRef.current = 1;
+    zoomFittedRef.current = false;
     setZoom(1);
     setSelectedNode(-1);
 
     startAnimation();
 
     return () => { if (animRef.current) cancelAnimationFrame(animRef.current); };
-  }, [graphData]);
+  }, [graphData, edgeDensity]);
+
+  /**
+   * pruneEdges — Keep only the N strongest edges per node
+   * This is the KEY fix for the spaghetti graph problem.
+   * With 30 nodes and 142 edges, the graph is unreadable.
+   * Pruning to max 3 edges/node reduces to ~45 clean edges.
+   */
+  function pruneEdges(edges, nodes, maxPerNode = 3) {
+    if (!edges || edges.length === 0) return edges;
+    
+    // Sort edges by weight (strongest first)
+    const sorted = [...edges].sort((a, b) => (b.weight || 0.5) - (a.weight || 0.5));
+    
+    // Track how many edges each node has
+    const nodeCounts = {};
+    const kept = [];
+    
+    for (const edge of sorted) {
+      const sc = nodeCounts[edge.source] || 0;
+      const tc = nodeCounts[edge.target] || 0;
+      
+      // Keep edge if both nodes still have capacity
+      if (sc < maxPerNode && tc < maxPerNode) {
+        kept.push(edge);
+        nodeCounts[edge.source] = sc + 1;
+        nodeCounts[edge.target] = tc + 1;
+      }
+    }
+    
+    return kept;
+  }
 
   // ── Animation loop ──
   const startAnimation = useCallback(() => {
@@ -94,7 +133,13 @@ export default function KnowledgeGraphView({ documentId }) {
       if (!engine || !renderer) return;
 
       const pinnedIdx = dragRef.current.active ? dragRef.current.nodeIdx : -1;
-      engine.tick(pinnedIdx);
+      const active = engine.tick(pinnedIdx);
+
+      // Auto zoom-to-fit when simulation first stabilizes
+      if (!active && !zoomFittedRef.current) {
+        zoomFittedRef.current = true;
+        setTimeout(() => zoomToFit(), 50);
+      }
 
       // Mark neighbors of selected node
       if (selectedNode >= 0) {
@@ -235,13 +280,8 @@ export default function KnowledgeGraphView({ documentId }) {
     panDragRef.current.active = false;
   };
 
-  const handleWheel = (e) => {
-    e.preventDefault();
-    const delta = e.deltaY > 0 ? 0.9 : 1.1;
-    const newZoom = Math.max(0.2, Math.min(4, zoomRef.current * delta));
-    zoomRef.current = newZoom;
-    setZoom(newZoom);
-  };
+  // handleWheel is now handled via native event listener below (non-passive)
+
 
   // ── Resize ──
   useEffect(() => {
@@ -259,6 +299,66 @@ export default function KnowledgeGraphView({ documentId }) {
     observer.observe(parent);
     return () => observer.disconnect();
   }, [graphData]);
+
+  // ── Wheel zoom — MUST use native addEventListener with {passive: false} ──
+  // React's onWheel is passive by default → cannot preventDefault → page scrolls instead of zoom
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !graphData) return;
+
+    const wheelHandler = (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const delta = e.deltaY > 0 ? 0.9 : 1.1;
+
+      // Zoom toward mouse cursor position
+      const rect = canvas.getBoundingClientRect();
+      const mx = e.clientX - rect.left;
+      const my = e.clientY - rect.top;
+      const oldZoom = zoomRef.current;
+      const newZoom = Math.max(0.15, Math.min(5, oldZoom * delta));
+
+      // Adjust pan so zoom centers on cursor
+      panRef.current.x = mx - (mx - panRef.current.x) * (newZoom / oldZoom);
+      panRef.current.y = my - (my - panRef.current.y) * (newZoom / oldZoom);
+
+      zoomRef.current = newZoom;
+      setZoom(newZoom);
+    };
+
+    canvas.addEventListener('wheel', wheelHandler, { passive: false });
+    return () => canvas.removeEventListener('wheel', wheelHandler);
+  }, [graphData]);
+
+  // ── Zoom-to-fit — calculate bounding box and center graph in viewport ──
+  const zoomToFit = useCallback(() => {
+    const engine = engineRef.current;
+    const container = containerRef.current;
+    if (!engine || !container || !engine.nodes.length) return;
+
+    const nodes = engine.nodes;
+    let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+    for (const n of nodes) {
+      minX = Math.min(minX, n.x - (n.radius || 20));
+      minY = Math.min(minY, n.y - (n.radius || 20));
+      maxX = Math.max(maxX, n.x + (n.radius || 20));
+      maxY = Math.max(maxY, n.y + (n.radius || 20));
+    }
+
+    const graphW = maxX - minX + 120;
+    const graphH = maxY - minY + 120;
+    const containerW = container.clientWidth;
+    const containerH = container.clientHeight;
+
+    const fitZoom = Math.min(containerW / graphW, containerH / graphH, 1.8);
+    const centerX = (minX + maxX) / 2;
+    const centerY = (minY + maxY) / 2;
+
+    zoomRef.current = fitZoom;
+    panRef.current.x = containerW / 2 - centerX * fitZoom;
+    panRef.current.y = containerH / 2 - centerY * fitZoom;
+    setZoom(fitZoom);
+  }, []);
 
   // ── Keyboard: Ctrl+F search ──
   useEffect(() => {
@@ -292,8 +392,8 @@ export default function KnowledgeGraphView({ documentId }) {
 
   // ── Zoom controls ──
   const zoomIn = () => { zoomRef.current = Math.min(4, zoomRef.current * 1.3); setZoom(zoomRef.current); };
-  const zoomOut = () => { zoomRef.current = Math.max(0.2, zoomRef.current * 0.7); setZoom(zoomRef.current); };
-  const resetView = () => { zoomRef.current = 1; panRef.current = { x: 0, y: 0 }; setZoom(1); setSelectedNode(-1); };
+  const zoomOut = () => { zoomRef.current = Math.max(0.15, zoomRef.current * 0.7); setZoom(zoomRef.current); };
+  const resetView = () => { zoomToFit(); setSelectedNode(-1); };
 
   // ── Selected node data ──
   const selectedNodeData = selectedNode >= 0 ? engineRef.current?.nodes[selectedNode] : null;
@@ -353,7 +453,6 @@ export default function KnowledgeGraphView({ documentId }) {
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
           onMouseLeave={handleMouseUp}
-          onWheel={handleWheel}
         />
 
         {/* ── Stats Overlay (top-left) ── */}
@@ -366,7 +465,19 @@ export default function KnowledgeGraphView({ documentId }) {
         }}>
           <span><strong style={{ color: 'var(--c-text-primary)' }}>{graphData?.stats?.total_concepts || engineRef.current?.nodes.length || 0}</strong> concepts</span>
           <span style={{ color: 'var(--c-border)' }}>·</span>
-          <span><strong style={{ color: 'var(--c-text-primary)' }}>{graphData?.stats?.total_edges || engineRef.current?.edges.length || 0}</strong> connections</span>
+          <span><strong style={{ color: 'var(--c-text-primary)' }}>{engineRef.current?.edges.length || 0}</strong> / {graphData?.edges?.length || 0} edges</span>
+          {graphData?.stats?.communities > 0 && (
+            <>
+              <span style={{ color: 'var(--c-border)' }}>·</span>
+              <span><strong style={{ color: '#f59e0b' }}>{graphData.stats.communities}</strong> clusters</span>
+            </>
+          )}
+          {!graphData?.stats?.communities && graphData?.cluster_names && (
+            <>
+              <span style={{ color: 'var(--c-border)' }}>·</span>
+              <span><strong style={{ color: '#f59e0b' }}>{Object.keys(graphData.cluster_names).length}</strong> clusters</span>
+            </>
+          )}
           <span style={{ color: 'var(--c-border)' }}>·</span>
           <span>{Math.round(zoomRef.current * 100)}%</span>
         </div>
@@ -409,6 +520,7 @@ export default function KnowledgeGraphView({ documentId }) {
             { icon: ZoomOut, action: zoomOut, title: 'Thu nhỏ' },
             { icon: Maximize2, action: resetView, title: 'Reset view' },
             { icon: Search, action: () => setShowSearch(s => !s), title: 'Tìm kiếm (Ctrl+F)' },
+            { icon: RotateCcw, action: loadGraph, title: 'Rebuild graph' },
           ].map(({ icon: Icon, action, title }, i) => (
             <button key={i} onClick={action} title={title} style={{
               width: 34, height: 34, borderRadius: 'var(--radius-md)',
@@ -423,6 +535,26 @@ export default function KnowledgeGraphView({ documentId }) {
               <Icon size={15} />
             </button>
           ))}
+
+          {/* Edge density slider */}
+          <div style={{
+            background: 'var(--c-bg-glass-strong)', borderRadius: 'var(--radius-md)',
+            padding: '6px 8px', border: '1px solid var(--c-border)',
+            backdropFilter: 'blur(8px)', display: 'flex', flexDirection: 'column',
+            alignItems: 'center', gap: 3,
+          }}>
+            <span style={{ fontSize: '0.5rem', color: 'var(--c-text-tertiary)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em' }}>Edges</span>
+            <input
+              type="range"
+              min={1}
+              max={8}
+              value={edgeDensity}
+              onChange={e => setEdgeDensity(Number(e.target.value))}
+              style={{ width: 28, accentColor: 'var(--c-accent)', writingMode: 'vertical-lr', direction: 'rtl', height: 50, cursor: 'pointer' }}
+              title={`Max ${edgeDensity} edges per node`}
+            />
+            <span style={{ fontSize: '0.5625rem', color: 'var(--c-text-secondary)', fontWeight: 600, fontFamily: 'var(--font-mono)' }}>{edgeDensity}</span>
+          </div>
         </div>
 
         {/* ── Minimap (bottom-left) ── */}
@@ -485,8 +617,9 @@ export default function KnowledgeGraphView({ documentId }) {
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
             {[
               { label: 'Centrality', value: `${((selectedNodeData.centrality_score || 0) * 100).toFixed(1)}%` },
-              { label: 'Kết nối', value: selectedEdges.length },
-              { label: 'Chunks liên quan', value: selectedNodeData.related_chunk_ids?.length || 0 },
+              { label: 'Connections', value: selectedEdges.length },
+              { label: 'Related chunks', value: selectedNodeData.related_chunk_ids?.length || 0 },
+              ...(selectedNodeData.community != null ? [{ label: 'Community', value: graphData?.cluster_names?.[selectedNodeData.community] || `Cluster ${selectedNodeData.community}` }] : []),
               ...(selectedNodeData.mastery != null ? [{ label: 'Mastery', value: `${Math.round(selectedNodeData.mastery * 100)}%` }] : []),
             ].map(({ label, value }) => (
               <div key={label} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.8125rem' }}>

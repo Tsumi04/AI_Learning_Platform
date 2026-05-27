@@ -13,7 +13,7 @@ const notificationSchema = new mongoose.Schema({
   },
   type: {
     type: String,
-    enum: ['system', 'achievement', 'streak', 'quiz', 'flashcard', 'social', 'reminder', 'level_up', 'challenge'],
+    enum: ['system', 'achievement', 'streak', 'quiz', 'flashcard', 'social', 'reminder', 'level_up', 'challenge', 'alert', 'digest'],
     default: 'system',
   },
   title: {

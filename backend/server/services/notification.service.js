@@ -71,6 +71,38 @@ export const NotificationTemplates = {
     icon: '🃏', actionUrl: '/dashboard',
   }),
 
+  masteryDropAlert: (userId, conceptName, dropPercent) => createNotification(userId, {
+    type: 'alert', title: `📉 Mastery dropped: ${conceptName}`,
+    message: `Your understanding decreased by ${dropPercent}%. Review to maintain your knowledge.`,
+    icon: '📉', actionUrl: '/dashboard',
+    metadata: { concept: conceptName, drop: dropPercent },
+  }),
+
+  smartReviewReminder: (userId, dueCount, overdueCount) => createNotification(userId, {
+    type: 'reminder', title: overdueCount > 0
+      ? `⚠️ ${overdueCount} overdue + ${dueCount - overdueCount} due cards`
+      : `📚 ${dueCount} flashcards ready for review`,
+    message: overdueCount > 0
+      ? 'Some cards are significantly overdue. Review now to prevent forgetting!'
+      : 'Keep your spaced repetition schedule on track.',
+    icon: overdueCount > 0 ? '⚠️' : '📚', actionUrl: '/dashboard',
+    metadata: { dueCount, overdueCount },
+  }),
+
+  inactivityWarning: (userId, daysInactive) => createNotification(userId, {
+    type: 'reminder', title: `💪 ${daysInactive} days since last session`,
+    message: 'Even a quick 5-minute review helps maintain your knowledge. Start small!',
+    icon: '💪', actionUrl: '/dashboard',
+    metadata: { daysInactive },
+  }),
+
+  weeklyDigest: (userId, digest) => createNotification(userId, {
+    type: 'digest', title: '📊 Your Weekly Learning Digest',
+    message: `${digest.study_time_minutes}min studied · ${digest.concepts_mastered} concepts mastered · ${digest.streak_days}-day streak`,
+    icon: '📊', actionUrl: '/dashboard',
+    metadata: digest,
+  }),
+
   welcome: (userId) => createNotification(userId, {
     type: 'system', title: 'Welcome to NeuroVault! 🧠',
     message: 'Start by uploading a document to begin your AI-powered learning journey.',
@@ -82,6 +114,7 @@ function getDefaultIcon(type) {
   const icons = {
     system: '🔔', achievement: '🏅', streak: '🔥', quiz: '📝',
     flashcard: '🃏', social: '👥', reminder: '⏰', level_up: '⬆️', challenge: '🎯',
+    alert: '⚠️', digest: '📊',
   };
   return icons[type] || '🔔';
 }

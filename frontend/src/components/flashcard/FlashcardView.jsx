@@ -523,6 +523,23 @@ export default function FlashcardView({ documentId }) {
                 {diffLabel.text}
               </span>
             )}
+            {/* New deck button */}
+            <button
+              onClick={generateCards}
+              title="Generate new flashcard deck"
+              style={{
+                display: 'flex', alignItems: 'center', gap: 4,
+                padding: '0.2rem 0.5rem', borderRadius: 'var(--radius-md)',
+                border: '1px solid var(--c-border)', cursor: 'pointer',
+                background: 'var(--c-bg-secondary)', color: 'var(--c-text-secondary)',
+                fontSize: '0.625rem', fontWeight: 500,
+                transition: 'all var(--duration-fast)',
+              }}
+              onMouseEnter={e => { e.currentTarget.style.borderColor = '#10b981'; e.currentTarget.style.color = '#10b981'; }}
+              onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--c-border)'; e.currentTarget.style.color = 'var(--c-text-secondary)'; }}
+            >
+              <RotateCcw size={10} /> New Deck
+            </button>
           </div>
         </div>
         <div className="progress-bar">

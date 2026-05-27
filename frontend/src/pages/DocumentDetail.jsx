@@ -8,7 +8,7 @@ import {
 } from 'lucide-react';
 import { documentsAPI, aiAPI, annotationsAPI, libraryAPI } from '../services/api';
 import useI18nStore from '../store/useI18nStore';
-import ChatBox from '../components/chat/ChatBox';
+import StreamingChatBox from '../components/chat/StreamingChatBox';
 import QuizView from '../components/quiz/QuizView';
 import FlashcardView from '../components/flashcard/FlashcardView';
 import KnowledgeGraphView from '../components/knowledge/KnowledgeGraphView';
@@ -199,7 +199,7 @@ export default function DocumentDetail() {
           borderRadius: '0 var(--radius-lg) var(--radius-lg) 0',
           overflow: 'hidden',
         }}>
-          <ChatBox documentId={id} documentTitle={document?.title} />
+          <StreamingChatBox documentId={id} documentTitle={document?.title} />
         </div>
       )}
 
@@ -334,7 +334,7 @@ export default function DocumentDetail() {
       }}>
         {activeTab === 'viewer' && renderViewerTab()}
 
-        {activeTab === 'chat' && <ChatBox documentId={id} documentTitle={document?.title} />}
+        {activeTab === 'chat' && <StreamingChatBox documentId={id} documentTitle={document?.title} />}
 
         {activeTab === 'quiz' && (
           <div className="bento-card" style={{ flex: 1, overflow: 'auto' }}>
@@ -528,6 +528,7 @@ function PublishModal({ documentId, documentTitle, onClose, onSuccess, t }) {
             onChange={e => setDescription(e.target.value)}
             placeholder={t('library.descPlaceholder')}
             rows={3}
+            maxLength={1000}
             style={{ resize: 'vertical', fontSize: '0.8125rem' }}
           />
         </div>

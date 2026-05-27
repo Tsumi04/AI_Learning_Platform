@@ -105,7 +105,7 @@ router.post('/publish', auth, async (req, res, next) => {
       description: description || '',
       subject: subject || 'other',
       tags: (tags || []).slice(0, 10).map(t => t.toLowerCase().trim()).filter(Boolean),
-      language: doc.language || 'en',
+      language: (doc.language && ['vi', 'en', 'mixed'].includes(doc.language)) ? doc.language : 'en',
       content_preview: preview,
       word_count: doc.metadata?.word_count || 0,
       concept_count: conceptCount,

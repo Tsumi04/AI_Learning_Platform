@@ -1,19 +1,21 @@
 import { useState, useRef, useEffect, useCallback, useMemo } from 'react';
 import {
   Send, Sparkles, AlertCircle, RotateCcw, BookOpen,
-  Square, Copy, Check, Trash2, Clock,
+  Square, Copy, Check, Trash2, Clock, Shield, Tag,
 } from 'lucide-react';
 import useAuthStore from '../../store/useAuthStore';
-import { getAccessToken } from '../../services/api';
+import { getAccessToken, _buildAuthHeaders } from '../../services/api';
 import useSpeechRecognition from '../../hooks/useSpeechRecognition';
 import useSpeechSynthesis from '../../hooks/useSpeechSynthesis';
 import { VoiceInputButton, TTSButton, VoiceLanguageSelector } from '../voice/VoiceControls';
+import MarkdownRenderer from '../shared/MarkdownRenderer';
 
 /**
- * StreamingChatBox — SSE Streaming Chat với RAG
+ * StreamingChatBox v2 — SSE Streaming Chat + RAG + Grounding + Topics
  * 
  * Sử dụng fetch() + ReadableStream để stream SSE từ backend.
  * Hỗ trợ AbortController để cancel request.
+ * Displays grounding score and topic tracking.
  * Chat history được lưu per-document trong sessionStorage.
  */
 
@@ -21,7 +23,7 @@ const HISTORY_KEY_PREFIX = 'neurovault_chat_';
 
 function getStoredMessages(documentId) {
   try {
-    const raw = sessionStorage.getItem(`${HISTORY_KEY_PREFIX}${documentId}`);
+    const raw = localStorage.getItem(`${HISTORY_KEY_PREFIX}${documentId}`);
     if (raw) return JSON.parse(raw);
   } catch { /* ignore */ }
   return null;
@@ -31,7 +33,7 @@ function storeMessages(documentId, messages) {
   try {
     // Giữ tối đa 50 tin nhắn gần nhất
     const trimmed = messages.slice(-50);
-    sessionStorage.setItem(
+    localStorage.setItem(
       `${HISTORY_KEY_PREFIX}${documentId}`,
       JSON.stringify(trimmed)
     );
@@ -152,14 +154,12 @@ export default function StreamingChatBox({ documentId, documentTitle }) {
 
     try {
       const chatHistory = buildChatHistory();
-      const token = getAccessToken();
 
       const response = await fetch('/api/ai/chat', {
         method: 'POST',
-        headers: {
+        headers: _buildAuthHeaders({
           'Content-Type': 'application/json',
-          ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
-        },
+        }),
         body: JSON.stringify({
           document_id: documentId,
           query,
@@ -237,7 +237,14 @@ export default function StreamingChatBox({ documentId, documentTitle }) {
         const content = data.answer || data.response || 'Không có phản hồi từ AI.';
         setMessages(prev => prev.map(m =>
           m.id === aiMsgId
-            ? { ...m, content, sources: data.sources || [], isStreaming: false }
+            ? {
+                ...m,
+                content,
+                sources: data.sources || [],
+                grounding: data.grounding || null,
+                topic: data.topic || null,
+                isStreaming: false,
+              }
             : m
         ));
         setConnectionStatus('online');
@@ -426,9 +433,12 @@ export default function StreamingChatBox({ documentId, documentTitle }) {
                 <div style={{
                   fontSize: '0.8125rem', lineHeight: 1.7,
                   color: msg.isError ? 'var(--c-text-secondary)' : 'var(--c-text-primary)',
-                  whiteSpace: 'pre-wrap', wordBreak: 'break-word',
+                  wordBreak: 'break-word',
                 }}>
-                  {msg.content}
+                  {msg.role === 'ai' && !msg.isError
+                    ? <MarkdownRenderer content={msg.content} />
+                    : <span style={{ whiteSpace: 'pre-wrap' }}>{msg.content}</span>
+                  }
                   {msg.isStreaming && (
                     <span className="streaming-cursor" style={{
                       display: 'inline-block',
@@ -466,6 +476,42 @@ export default function StreamingChatBox({ documentId, documentTitle }) {
                         {src.text?.slice(0, 120) || 'No preview'}...
                       </div>
                     ))}
+                  </div>
+                )}
+
+                {/* Grounding Score Badge (Phase 3 — Task 3.4) */}
+                {msg.grounding && !msg.isStreaming && (
+                  <div style={{
+                    display: 'flex', alignItems: 'center', gap: 6,
+                    marginTop: 'var(--space-xs)', paddingTop: 'var(--space-xs)',
+                    borderTop: '1px solid var(--c-border)',
+                  }}>
+                    <Shield size={10} style={{
+                      color: msg.grounding.is_grounded ? '#34d399' : '#fbbf24',
+                    }} />
+                    <span style={{
+                      fontSize: '0.5625rem', fontWeight: 600,
+                      color: msg.grounding.is_grounded ? '#34d399' : '#fbbf24',
+                    }}>
+                      {msg.grounding.is_grounded ? 'Grounded' : 'Unverified'}
+                    </span>
+                    <span style={{
+                      fontSize: '0.5625rem', color: 'var(--c-text-muted)',
+                      fontFamily: 'var(--font-mono)',
+                    }}>
+                      {Math.round(msg.grounding.grounding_score * 100)}%
+                    </span>
+                    {msg.topic && msg.topic.current_topic && (
+                      <>
+                        <span style={{ color: 'var(--c-border)', margin: '0 2px' }}>·</span>
+                        <Tag size={9} style={{ color: 'var(--c-text-muted)' }} />
+                        <span style={{
+                          fontSize: '0.5625rem', color: 'var(--c-text-muted)',
+                        }}>
+                          {msg.topic.current_topic}
+                        </span>
+                      </>
+                    )}
                   </div>
                 )}
               </div>

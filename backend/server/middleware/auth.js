@@ -7,6 +7,9 @@ import User from '../models/User.model.js';
  * Verifies access token từ Authorization header (Bearer <token>)
  */
 const auth = async (req, res, next) => {
+  // Skip JWT verification if devAuth already injected user
+  if (req.user && req.userId) return next();
+
   try {
     const authHeader = req.headers.authorization;
     if (!authHeader || !authHeader.startsWith('Bearer ')) {

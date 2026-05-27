@@ -51,7 +51,7 @@ function PageLoader() {
 }
 
 // ═══ DEV BYPASS: Set true to skip login ═══
-const DEV_BYPASS_AUTH = true;
+const DEV_BYPASS_AUTH = import.meta.env.DEV;
 
 function ProtectedRoute({ children }) {
   const { isAuthenticated, isLoading } = useAuthStore();

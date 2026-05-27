@@ -2,25 +2,27 @@ import { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import {
   HelpCircle, CheckCircle, XCircle, ArrowRight, RotateCcw,
   Trophy, Loader2, Clock, Brain, Zap, AlertCircle,
-  ChevronDown, Lightbulb, Check, X,
+  ChevronDown, Lightbulb, Check, X, Activity, TrendingUp,
 } from 'lucide-react';
 import { aiAPI, learningAPI } from '../../services/api';
 import QuizTimer, { useQuizTimer } from './QuizTimer';
 import QuizScoreBoard from './QuizScoreBoard';
 
 /**
- * QuizView v2 — Premium Quiz Interface
+ * QuizView v3 — Premium Quiz Interface + Adaptive Mode
  * 
  * Features:
- * - Timer (tổng + per-question optional countdown)
- * - 3 loại câu hỏi: MCQ, Fill-in-blank, True/False
+ * - Adaptive IRT mode (real-time difficulty adjustment)
+ * - Timer (total + per-question optional countdown)
+ * - 3 question types: MCQ, Fill-in-blank, True/False
  * - Bloom's Taxonomy badges
- * - Explanations sau khi trả lời
+ * - Live difficulty/ability indicators
+ * - Explanations after answering
  * - Difficulty selector (Easy/Medium/Hard)
  * - Question type filter
  * - Animated transitions
  * - Detailed score board
- * - Record activity vào backend
+ * - Record activity to backend
  */
 
 const DIFFICULTY_OPTIONS = [
@@ -51,6 +53,7 @@ export default function QuizView({ documentId }) {
   const [difficulty, setDifficulty] = useState(0.5);
   const [enableTimer, setEnableTimer] = useState(false);
   const [timePerQuestion, setTimePerQuestion] = useState(30);
+  const [adaptiveMode, setAdaptiveMode] = useState(false);
 
   // ── Quiz state ──
   const [questions, setQuestions] = useState([]);
@@ -64,6 +67,12 @@ export default function QuizView({ documentId }) {
   const [started, setStarted] = useState(false);
   const [fillAnswer, setFillAnswer] = useState('');
   const [shuffledOptions, setShuffledOptions] = useState([]);
+
+  // ── Adaptive state ──
+  const [adaptiveSession, setAdaptiveSession] = useState(null);
+  const [abilityLevel, setAbilityLevel] = useState(0);
+  const [currentDifficulty, setCurrentDifficulty] = useState(0.5);
+  const [confidenceLevel, setConfidenceLevel] = useState('...');
 
   // ── Timer ──
   const timer = useQuizTimer();
@@ -92,18 +101,40 @@ export default function QuizView({ documentId }) {
       setIsLoading(true);
       setError('');
       setStarted(true);
-      const data = await aiAPI.generateQuiz(documentId, numQuestions, difficulty);
-      if (data.questions && data.questions.length > 0) {
-        setQuestions(data.questions);
-        setCurrentIndex(0);
-        setAnswers([]);
-        setIsFinished(false);
-        setSelectedAnswer(null);
-        setShowResult(false);
-        setFillAnswer('');
-        timer.start();
+
+      if (adaptiveMode) {
+        // Adaptive IRT mode
+        const data = await aiAPI.startAdaptiveQuiz(documentId, 'default', numQuestions);
+        if (data.session_id && data.current_question) {
+          setAdaptiveSession(data);
+          setQuestions([data.current_question]);
+          setAbilityLevel(data.ability || 0);
+          setCurrentDifficulty(data.current_question.difficulty || 0.5);
+          setCurrentIndex(0);
+          setAnswers([]);
+          setIsFinished(false);
+          setSelectedAnswer(null);
+          setShowResult(false);
+          setFillAnswer('');
+          timer.start();
+        } else {
+          setError('Could not start adaptive quiz. Try standard mode.');
+        }
       } else {
-        setError('No questions generated. The document may need more content.');
+        // Standard mode
+        const data = await aiAPI.generateQuiz(documentId, numQuestions, difficulty);
+        if (data.questions && data.questions.length > 0) {
+          setQuestions(data.questions);
+          setCurrentIndex(0);
+          setAnswers([]);
+          setIsFinished(false);
+          setSelectedAnswer(null);
+          setShowResult(false);
+          setFillAnswer('');
+          timer.start();
+        } else {
+          setError('No questions generated. The document may need more content.');
+        }
       }
     } catch (err) {
       setError(err.message || 'Failed to generate quiz. Make sure AI server is running.');
@@ -142,7 +173,54 @@ export default function QuizView({ documentId }) {
 
   // ── Next question ──
   const handleNext = async () => {
-    if (currentIndex < questions.length - 1) {
+    if (adaptiveMode && adaptiveSession) {
+      // Adaptive: submit answer to get next question
+      try {
+        const timeSpent = Math.round((Date.now() - questionStartRef.current));
+        const lastAnswer = answers[answers.length - 1];
+        const result = await aiAPI.submitAdaptiveAnswer(
+          adaptiveSession.session_id,
+          lastAnswer?.answer || '',
+          timeSpent,
+        );
+
+        if (result.status === 'completed' || result.is_finished) {
+          timer.stop();
+          setIsFinished(true);
+          setAbilityLevel(result.final_ability || abilityLevel);
+          setConfidenceLevel(result.ability_label || '...');
+          // Record activity
+          try {
+            const correct = answers.filter(a => a.isCorrect).length;
+            await learningAPI.recordActivity('quiz', documentId, timer.getElapsed(), {
+              quiz: {
+                total_questions: answers.length,
+                correct_answers: correct,
+                score_percentage: Math.round((correct / answers.length) * 100),
+                difficulty,
+                mode: 'adaptive',
+                final_ability: result.final_ability,
+              },
+            });
+          } catch (e) {
+            console.warn('Could not record quiz activity:', e.message);
+          }
+        } else if (result.current_question) {
+          setQuestions(prev => [...prev, result.current_question]);
+          setCurrentIndex(prev => prev + 1);
+          setSelectedAnswer(null);
+          setShowResult(false);
+          setFillAnswer('');
+          setAbilityLevel(result.ability || abilityLevel);
+          setCurrentDifficulty(result.current_question.difficulty || currentDifficulty);
+          setConfidenceLevel(result.ability_label || confidenceLevel);
+        }
+      } catch (err) {
+        console.warn('Adaptive quiz error:', err.message);
+        timer.stop();
+        setIsFinished(true);
+      }
+    } else if (currentIndex < questions.length - 1) {
       setCurrentIndex(prev => prev + 1);
       setSelectedAnswer(null);
       setShowResult(false);
@@ -150,7 +228,7 @@ export default function QuizView({ documentId }) {
     } else {
       timer.stop();
       setIsFinished(true);
-      // Record activity vào backend
+      // Record activity
       try {
         const correct = answers.filter(a => a.isCorrect).length;
         await learningAPI.recordActivity('quiz', documentId, timer.getElapsed(), {
@@ -177,6 +255,10 @@ export default function QuizView({ documentId }) {
     setStarted(false);
     setQuestions([]);
     setFillAnswer('');
+    setAdaptiveSession(null);
+    setAbilityLevel(0);
+    setCurrentDifficulty(0.5);
+    setConfidenceLevel('...');
     timer.stop();
   };
 
@@ -302,8 +384,46 @@ export default function QuizView({ documentId }) {
         </div>
 
         <button className="btn btn-primary btn-lg" onClick={generateQuiz} style={{ minWidth: 200 }}>
-          <Zap size={18} /> Start Quiz
+          <Zap size={18} /> {adaptiveMode ? 'Start Adaptive Quiz' : 'Start Quiz'}
         </button>
+
+        {/* Adaptive Mode Toggle */}
+        <div style={{
+          display: 'flex', alignItems: 'center', gap: 'var(--space-md)',
+          padding: 'var(--space-md) var(--space-lg)',
+          borderRadius: 'var(--radius-lg)', background: adaptiveMode ? 'rgba(139,92,246,0.08)' : 'var(--c-bg-secondary)',
+          border: `1px solid ${adaptiveMode ? 'rgba(139,92,246,0.3)' : 'var(--c-border)'}`,
+          transition: 'all 0.2s ease',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <Activity size={14} style={{ color: adaptiveMode ? '#8b5cf6' : 'var(--c-text-tertiary)' }} />
+            <span style={{ fontSize: '0.8125rem', fontWeight: 500, color: adaptiveMode ? '#8b5cf6' : 'var(--c-text-secondary)' }}>
+              Adaptive IRT Mode
+            </span>
+          </div>
+          <button
+            onClick={() => setAdaptiveMode(!adaptiveMode)}
+            style={{
+              width: 40, height: 22, borderRadius: 11,
+              border: 'none', cursor: 'pointer',
+              background: adaptiveMode ? '#8b5cf6' : 'var(--c-bg-tertiary)',
+              position: 'relative', transition: 'background 0.2s',
+            }}
+          >
+            <div style={{
+              width: 16, height: 16, borderRadius: '50%', background: 'white',
+              position: 'absolute', top: 3,
+              left: adaptiveMode ? 21 : 3,
+              transition: 'left 0.2s var(--ease-spring)',
+              boxShadow: '0 1px 3px rgba(0,0,0,0.2)',
+            }} />
+          </button>
+        </div>
+        {adaptiveMode && (
+          <div style={{ fontSize: '0.6875rem', color: 'var(--c-text-tertiary)', textAlign: 'center', maxWidth: 360 }}>
+            AI adjusts difficulty in real-time based on your performance using Item Response Theory (IRT)
+          </div>
+        )}
       </div>
     );
   }
@@ -399,12 +519,41 @@ export default function QuizView({ documentId }) {
             onTimeUp={handleTimeUp}
             questionIndex={currentIndex}
           />
+          {/* Adaptive difficulty indicator */}
+          {adaptiveMode && (
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 4,
+              padding: '0.15rem 0.5rem', borderRadius: 'var(--radius-full)',
+              background: 'rgba(139,92,246,0.08)', border: '1px solid rgba(139,92,246,0.2)',
+            }}>
+              <TrendingUp size={11} style={{ color: '#8b5cf6' }} />
+              <span style={{ fontSize: '0.625rem', fontWeight: 600, color: '#8b5cf6', fontFamily: 'var(--font-mono)' }}>
+                θ {abilityLevel > 0 ? '+' : ''}{abilityLevel.toFixed(1)}
+              </span>
+            </div>
+          )}
           <span style={{
             fontSize: '0.75rem', fontWeight: 600, color: 'var(--c-success)',
             fontFamily: 'var(--font-mono)',
           }}>
             {score} pts
           </span>
+          <button
+            onClick={generateQuiz}
+            title="Generate new quiz"
+            style={{
+              display: 'flex', alignItems: 'center', gap: 4,
+              padding: '0.25rem 0.6rem', borderRadius: 'var(--radius-md)',
+              border: '1px solid var(--c-border)', cursor: 'pointer',
+              background: 'var(--c-bg-secondary)', color: 'var(--c-text-secondary)',
+              fontSize: '0.6875rem', fontWeight: 500,
+              transition: 'all var(--duration-fast)',
+            }}
+            onMouseEnter={e => { e.currentTarget.style.borderColor = 'var(--c-accent)'; e.currentTarget.style.color = 'var(--c-accent)'; }}
+            onMouseLeave={e => { e.currentTarget.style.borderColor = 'var(--c-border)'; e.currentTarget.style.color = 'var(--c-text-secondary)'; }}
+          >
+            <RotateCcw size={12} /> New Quiz
+          </button>
         </div>
       </div>
 
@@ -425,12 +574,77 @@ export default function QuizView({ documentId }) {
             : 'Fill in the Blank'}
         </div>
 
-        <h3 style={{
-          fontSize: '1.125rem', fontWeight: 600, color: 'var(--c-text-primary)',
-          lineHeight: 1.6, marginBottom: 'var(--space-xl)',
-        }}>
-          {q.question_text}
-        </h3>
+        {/* Question text — special handling for fill_blank to show inline input */}
+        {q.question_type === 'fill_blank' ? (
+          <h3 style={{
+            fontSize: '1.125rem', fontWeight: 600, color: 'var(--c-text-primary)',
+            lineHeight: 2.4, marginBottom: 'var(--space-xl)',
+          }}>
+            {(() => {
+              // Split question text on blank placeholders
+              const parts = q.question_text.split(/(_{3,}|\[BLANK\]|\.{3,}|…)/i);
+              if (parts.length <= 1) {
+                // No inline blank found — show text + separate input
+                return (
+                  <>
+                    <span>{q.question_text}</span>
+                    <br />
+                    <span style={{
+                      display: 'inline-block', marginTop: 8,
+                      fontSize: '0.75rem', color: 'var(--c-text-tertiary)',
+                      fontWeight: 400,
+                    }}>↓ Type your answer below</span>
+                  </>
+                );
+              }
+              // Render inline input at blank position
+              return parts.map((part, i) => {
+                if (/^(_{3,}|\[BLANK\]|\.{3,}|…)$/i.test(part)) {
+                  const isCorrect = showResult && fillAnswer.toLowerCase().trim() === q.correct_answer?.toLowerCase().trim();
+                  return (
+                    <input
+                      key={i}
+                      value={fillAnswer}
+                      onChange={e => setFillAnswer(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter' && fillAnswer.trim()) handleAnswer(fillAnswer.trim()); }}
+                      placeholder="••••••"
+                      disabled={showResult}
+                      autoFocus
+                      style={{
+                        display: 'inline-block',
+                        width: Math.max(140, (q.correct_answer?.length || 8) * 15),
+                        padding: '4px 12px', margin: '0 6px',
+                        borderTop: 'none', borderLeft: 'none', borderRight: 'none',
+                        borderBottom: `2.5px dashed ${showResult
+                          ? (isCorrect ? 'var(--c-success)' : 'var(--c-error)')
+                          : 'var(--c-accent)'}`,
+                        background: showResult
+                          ? (isCorrect ? 'rgba(52,211,153,0.08)' : 'rgba(248,113,113,0.08)')
+                          : 'rgba(99,102,241,0.06)',
+                        borderRadius: '4px 4px 0 0',
+                        fontSize: 'inherit', fontWeight: 700,
+                        color: showResult
+                          ? (isCorrect ? 'var(--c-success)' : 'var(--c-error)')
+                          : 'var(--c-accent)',
+                        outline: 'none',
+                        textAlign: 'center', fontFamily: 'inherit',
+                        transition: 'all 0.2s ease',
+                      }}
+                    />
+                  );
+                }
+                return <span key={i}>{part}</span>;
+              });
+            })()}
+          </h3>
+        ) : (
+          <h3 style={{
+            fontSize: '1.125rem', fontWeight: 600, color: 'var(--c-text-primary)',
+            lineHeight: 1.6, marginBottom: 'var(--space-xl)',
+          }}>
+            {q.question_text}
+          </h3>
+        )}
 
         {/* ── MCQ Options ── */}
         {q.question_type === 'mcq' && (
@@ -511,23 +725,33 @@ export default function QuizView({ documentId }) {
         {/* ── Fill in the Blank ── */}
         {q.question_type === 'fill_blank' && (
           <div>
-            <div style={{ display: 'flex', gap: 'var(--space-sm)' }}>
-              <input
-                className="input"
-                value={fillAnswer}
-                onChange={e => setFillAnswer(e.target.value)}
-                placeholder="Type your answer..."
-                onKeyDown={e => { if (e.key === 'Enter' && fillAnswer.trim()) handleAnswer(fillAnswer.trim()); }}
-                disabled={showResult}
-                style={{ fontSize: '1rem', flex: 1 }}
-                autoFocus
-              />
-              {!showResult && fillAnswer.trim() && (
-                <button className="btn btn-primary" onClick={() => handleAnswer(fillAnswer.trim())}>
-                  <ArrowRight size={16} />
-                </button>
-              )}
-            </div>
+            {/* Fallback input for questions without inline blank pattern */}
+            {!q.question_text.match(/_{3,}|\[BLANK\]|\.{3,}|…/i) && (
+              <div style={{ display: 'flex', gap: 'var(--space-sm)', marginBottom: 'var(--space-md)' }}>
+                <input
+                  className="input"
+                  value={fillAnswer}
+                  onChange={e => setFillAnswer(e.target.value)}
+                  placeholder="Type your answer..."
+                  onKeyDown={e => { if (e.key === 'Enter' && fillAnswer.trim()) handleAnswer(fillAnswer.trim()); }}
+                  disabled={showResult}
+                  style={{
+                    fontSize: '1rem', flex: 1,
+                    borderColor: showResult
+                      ? (fillAnswer.toLowerCase().trim() === q.correct_answer?.toLowerCase().trim() ? 'var(--c-success)' : 'var(--c-error)')
+                      : undefined,
+                  }}
+                  autoFocus
+                />
+              </div>
+            )}
+            {/* Submit button */}
+            {!showResult && fillAnswer.trim() && (
+              <button className="btn btn-primary" onClick={() => handleAnswer(fillAnswer.trim())} style={{ gap: 6 }}>
+                <ArrowRight size={16} /> Submit Answer
+              </button>
+            )}
+            {/* Result display */}
             {showResult && (
               <div style={{
                 marginTop: 'var(--space-md)', padding: 'var(--space-md)',
